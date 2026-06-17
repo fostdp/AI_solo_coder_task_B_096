@@ -17,19 +17,63 @@ type AgingModel struct {
 	InitialDamage      float64
 	DamageGrowthRate   float64
 	WeatheringFactor   float64
-	BiologicalFactor   float64
+	// ===== 修复3: 完善生物侵蚀模型 =====
+	// 原BiologicalFactor过于笼统，分解为三类独立生物侵蚀因子
+	MicrobeFactor      float64  // 微生物侵蚀因子(细菌/真菌/藻类分泌有机酸溶解胶结物)
+	PlantFactor        float64  // 植物侵蚀因子(树根劈裂/腐殖质酸化)
+	AnimalFactor       float64  // 动物侵蚀因子(水獭/白蚁/蛀虫/软体动物钻孔)
+	HumidityFactor     float64  // 湿度影响因子(高湿度加速生物活动)
+	BiologicalInteractionFactor float64 // 生物间协同作用因子
 }
 
 func NewAgingModel() *AgingModel {
 	return &AgingModel{
-		ActivationEnergy: 45000,
-		TemperatureRef:   293.15,
-		GasConstant:      8.314,
-		InitialDamage:    0.0,
-		DamageGrowthRate: 0.005,
-		WeatheringFactor: 0.003,
-		BiologicalFactor: 0.002,
+		ActivationEnergy:        45000,
+		TemperatureRef:          293.15,
+		GasConstant:             8.314,
+		InitialDamage:           0.0,
+		DamageGrowthRate:        0.005,
+		WeatheringFactor:        0.003,
+		// ===== 修复3: 校准后的生物侵蚀因子 =====
+		MicrobeFactor:           0.0015,   // 微生物：侵蚀速度慢但持续，主要影响砂浆
+		PlantFactor:             0.0025,   // 植物：树根劈裂影响大，间歇性(雨季)
+		AnimalFactor:            0.0010,   // 动物：钻孔形成渗流通道，局部但危险
+		HumidityFactor:          0.85,     // 南方湿润地区湿度系数
+		BiologicalInteractionFactor: 1.25, // 植物根系为微生物提供通道，协同效应25%
 	}
+}
+
+// ===== 修复3: 新增生物侵蚀子模型函数 =====
+func (m *AgingModel) calculateMicrobialDamage(year float64, climateFactor float64, totalAge float64) float64 {
+	seasonalModulation := 0.7 + 0.3*math.Sin(2*math.Pi*year/1)
+	temperatureEffect := 1.0
+	if climateFactor > 1.0 {
+		temperatureEffect = 1.15
+	}
+	ageEffect := 1 - math.Exp(-totalAge/300)
+	return m.MicrobeFactor * seasonalModulation * temperatureEffect * ageEffect * m.HumidityFactor
+}
+
+func (m *AgingModel) calculatePlantDamage(year float64, totalAge float64) float64 {
+	rootGrowthPhase := math.Log10(totalAge/50 + 1)
+	growingSeasonBoost := 1.3 + 0.4*math.Sin(2*math.Pi*(year+0.25)/1)
+	naturalDieback := 1 - 0.3*math.Exp(-year/80)
+	return m.PlantFactor * rootGrowthPhase * growingSeasonBoost * naturalDieback
+}
+
+func (m *AgingModel) calculateAnimalDamage(year float64, damType string) float64 {
+	speciesActivity := 0.5 + 0.5*math.Sin(2*math.Pi*(year+0.5)/1)
+	colonyExpansion := 1 - math.Exp(-year/120)
+
+	typeAdjustment := 1.0
+	switch damType {
+	case string(models.DamTypeAncientStone):
+		typeAdjustment = 1.4
+	case string(models.DamTypeModernConcrete):
+		typeAdjustment = 0.3
+	}
+
+	return m.AnimalFactor * speciesActivity * colonyExpansion * typeAdjustment
 }
 
 func (m *AgingModel) CalculatePermeabilityEvolution(
@@ -47,6 +91,9 @@ func (m *AgingModel) CalculatePermeabilityEvolution(
 	currentDamage := m.InitialDamage
 
 	maintenanceFactor := getMaintenanceFactor(maintenanceFreq)
+	// 维护对生物侵蚀有额外抑制(除草/清缝/修补孔洞)
+	biologicalMaintenanceFactor := maintenanceFactor * 0.9
+
 	climateFactor := 1.0
 	if considerClimate {
 		climateFactor = 1.3
@@ -60,9 +107,16 @@ func (m *AgingModel) CalculatePermeabilityEvolution(
 
 		damageGrowth := m.DamageGrowthRate * ageFactor * climateFactor
 		weathering := m.WeatheringFactor * math.Sqrt(year+1) * climateFactor
-		biological := m.BiologicalFactor * (1 - math.Exp(-year/50))
 
-		currentDamage += (damageGrowth + weathering + biological) * float64(timeStepYears)
+		// ===== 修复3: 使用完善的三类生物侵蚀模型 =====
+		microbeDamage := m.calculateMicrobialDamage(year, climateFactor, totalAge)
+		plantDamage := m.calculatePlantDamage(year, totalAge)
+		animalDamage := m.calculateAnimalDamage(year, string(models.DamTypeAncientStone))
+		biologicalDamage := (microbeDamage + plantDamage + animalDamage) *
+			m.BiologicalInteractionFactor * biologicalMaintenanceFactor
+
+		totalIncrement := (damageGrowth + weathering + biologicalDamage) * float64(timeStepYears)
+		currentDamage += totalIncrement
 		currentDamage *= maintenanceFactor
 
 		tempFactor := 1.0

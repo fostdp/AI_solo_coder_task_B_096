@@ -649,18 +649,110 @@ const VirtualTour = (function() {
             nextBtn.addEventListener('click', () => showScene(currentSceneIndex + 1));
         }
 
+    // ===== 修复4: 新增前端防抖和灵敏度控制 =====
+    const DEBOUNCE_MS = 300;
+    const COARSE_STEP = 0.10;
+    const FINE_STEP = 0.01;
+    let debounceTimer = null;
+    let lastUpstreamValue = null;
+    let lastDownstreamValue = null;
+    let lastRequestTime = 0;
+    const MIN_REQUEST_INTERVAL = 200;
+
+    function debounce(fn, ms) {
+        return function (...args) {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => fn.apply(this, args), ms);
+        };
+    }
+
+    function throttle(fn, ms) {
+        let last = 0;
+        return function (...args) {
+            const now = Date.now();
+            if (now - last >= ms) {
+                last = now;
+                return fn.apply(this, args);
+            }
+        };
+    }
+
+    const throttledApplyWaterLevel = throttle(applyWaterLevel, MIN_REQUEST_INTERVAL);
+
+    function hasSignificantChange(upWL, downWL, threshold = 0.02) {
+        if (lastUpstreamValue === null || lastDownstreamValue === null) {
+            return true;
+        }
+        const dUp = Math.abs(upWL - lastUpstreamValue);
+        const dDown = Math.abs(downWL - lastDownstreamValue);
+        return dUp >= threshold || dDown >= threshold;
+    }
+
+    const debouncedApplyFromSlider = debounce(function () {
+        const upWL = parseFloat(document.getElementById('tourUpstream').value);
+        const downWL = parseFloat(document.getElementById('tourDownstream').value);
+
+        if (!hasSignificantChange(upWL, downWL, FINE_STEP)) {
+            return;
+        }
+
+        lastUpstreamValue = upWL;
+        lastDownstreamValue = downWL;
+        throttledApplyWaterLevel();
+    }, DEBOUNCE_MS);
+
         const tourUpstream = document.getElementById('tourUpstream');
         if (tourUpstream) {
             tourUpstream.addEventListener('input', (e) => {
                 document.getElementById('tourUpstreamValue').textContent = e.target.value + ' m';
+                debouncedApplyFromSlider();
             });
+            tourUpstream.addEventListener('keydown', (e) => {
+                const step = e.shiftKey ? FINE_STEP : COARSE_STEP;
+                const el = e.target;
+                let val = parseFloat(el.value);
+                if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    val = Math.min(parseFloat(el.max) || Infinity, val + step);
+                    el.value = val.toFixed(2);
+                    document.getElementById('tourUpstreamValue').textContent = val.toFixed(2) + ' m';
+                    debouncedApplyFromSlider();
+                } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    val = Math.max(parseFloat(el.min) || 0, val - step);
+                    el.value = val.toFixed(2);
+                    document.getElementById('tourUpstreamValue').textContent = val.toFixed(2) + ' m';
+                    debouncedApplyFromSlider();
+                }
+            });
+            tourUpstream.setAttribute('step', COARSE_STEP.toString());
         }
 
         const tourDownstream = document.getElementById('tourDownstream');
         if (tourDownstream) {
             tourDownstream.addEventListener('input', (e) => {
                 document.getElementById('tourDownstreamValue').textContent = e.target.value + ' m';
+                debouncedApplyFromSlider();
             });
+            tourDownstream.addEventListener('keydown', (e) => {
+                const step = e.shiftKey ? FINE_STEP : COARSE_STEP;
+                const el = e.target;
+                let val = parseFloat(el.value);
+                if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    val = Math.min(parseFloat(el.max) || Infinity, val + step);
+                    el.value = val.toFixed(2);
+                    document.getElementById('tourDownstreamValue').textContent = val.toFixed(2) + ' m';
+                    debouncedApplyFromSlider();
+                } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    val = Math.max(parseFloat(el.min) || 0, val - step);
+                    el.value = val.toFixed(2);
+                    document.getElementById('tourDownstreamValue').textContent = val.toFixed(2) + ' m';
+                    debouncedApplyFromSlider();
+                }
+            });
+            tourDownstream.setAttribute('step', COARSE_STEP.toString());
         }
 
         const btnApply = document.getElementById('btnApplyWaterLevel');
@@ -775,6 +867,11 @@ const VirtualTour = (function() {
         const downWL = parseFloat(document.getElementById('tourDownstream').value);
         const highlight = document.getElementById('tourHighlight').value;
         const vizMode = document.getElementById('tourVizMode').value;
+
+        // 更新已提交的值（防抖/节流对比基准）
+        lastUpstreamValue = upWL;
+        lastDownstreamValue = downWL;
+        lastRequestTime = Date.now();
 
         SeepagePanel.showLoading('正在计算渗流场变化...', 15);
 

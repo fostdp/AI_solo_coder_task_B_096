@@ -283,6 +283,20 @@ func CrossEraComparison(req *models.CrossEraComparisonRequest) (*models.CrossEra
 	return result, nil
 }
 
+// ===== 修复4: 优化水位调节灵敏度参数 =====
+const (
+	SensitivitySmoothFactor    = 0.15  // 水位变化平滑系数，避免跳动
+	FlowChangeMinThreshold     = 0.03  // 渗流量变化最小可感知阈值(3%)
+	PressureChangeMinThreshold = 0.02  // 压力变化最小阈值(2%)
+	SensorNoiseFloor           = 0.005 // 传感器噪声本底(0.5%)
+	MinWaterLevelStep          = 0.01  // 最小水位步进(1cm)
+	HysteresisBandLow          = 0.98  // 风险等级迟滞低带
+	HysteresisBandHigh         = 1.02  // 风险等级迟滞高带
+)
+
+var lastRiskLevelStore = make(map[string]string) // 迟滞记忆
+
+// ===== 修复4: 优化水位调节灵敏度 - 主函数 =====
 func InteractiveAdjustment(req *models.InteractiveAdjustmentRequest) (*models.InteractiveAdjustmentResult, error) {
 	preset := dam_presets.GetDamPreset(req.DamKey)
 	if preset == nil {
@@ -291,6 +305,10 @@ func InteractiveAdjustment(req *models.InteractiveAdjustmentRequest) (*models.In
 
 	solver := simulation.NewSeepageSolverFromPreset(preset)
 	solver.SetGridResolution(50, 25)
+
+	// ===== 修复4: 灵敏度优化 - 水位输入量化与钳位 =====
+	minWL := 0.5
+	maxWL := preset.DesignUpstreamWL * 2.5
 
 	upWL := req.UpstreamWL
 	downWL := req.DownstreamWL
@@ -301,6 +319,24 @@ func InteractiveAdjustment(req *models.InteractiveAdjustmentRequest) (*models.In
 	if downWL <= 0 {
 		downWL = preset.DesignDownstreamWL
 	}
+
+	// 水位值钳位，避免极端
+	if upWL < minWL {
+		upWL = minWL
+	}
+	if upWL > maxWL {
+		upWL = maxWL
+	}
+	if downWL < 0 {
+		downWL = 0
+	}
+	if downWL >= upWL-0.1 {
+		downWL = upWL - 0.1
+	}
+
+	// 水位值量化到0.01m，避免浮点抖动导致的灵敏度闪烁
+	upWL = math.Round(upWL*100) / 100
+	downWL = math.Round(downWL*100) / 100
 
 	simResult, grids, err := solver.Run(upWL, downWL, "interactive")
 	if err != nil {
@@ -314,9 +350,25 @@ func InteractiveAdjustment(req *models.InteractiveAdjustmentRequest) (*models.In
 	flowChange := ""
 	riskLevel := "low"
 	explanation := ""
+	previousRisk := lastRiskLevelStore[req.DamKey]
 
 	if baselineResult != nil {
-		flowDiff := (simResult.TotalSeepageFlow - baselineResult.TotalSeepageFlow) / baselineResult.TotalSeepageFlow
+		baselineFlow := baselineResult.TotalSeepageFlow
+		currentFlow := simResult.TotalSeepageFlow
+
+		// ===== 修复4: 灵敏度优化 - 传感器噪声过滤 =====
+		var flowDiff float64
+		if baselineFlow > SensorNoiseFloor {
+			flowDiffRaw := (currentFlow - baselineFlow) / baselineFlow
+			// 噪声过滤：小于阈值视为无变化
+			if math.Abs(flowDiffRaw) < FlowChangeMinThreshold {
+				flowDiff = 0
+			} else {
+				// 平滑处理，避免跳变
+				flowDiff = flowDiffRaw * (1 - SensitivitySmoothFactor)
+			}
+		}
+
 		if flowDiff > 0.5 {
 			flowChange = fmt.Sprintf("渗流量增加%.1f%%，显著上升", flowDiff*100)
 		} else if flowDiff > 0.2 {
@@ -327,38 +379,70 @@ func InteractiveAdjustment(req *models.InteractiveAdjustmentRequest) (*models.In
 			flowChange = "渗流量基本稳定"
 		}
 
-		pressureDiff := (simResult.MaxPorePressure - baselineResult.MaxPorePressure) / baselineResult.MaxPorePressure
+		baselinePressure := baselineResult.MaxPorePressure
+		currentPressure := simResult.MaxPorePressure
+
+		var pressureDiff float64
+		if baselinePressure > 0 {
+			pressureDiffRaw := (currentPressure - baselinePressure) / baselinePressure
+			if math.Abs(pressureDiffRaw) < PressureChangeMinThreshold {
+				pressureDiff = 0
+			} else {
+				pressureDiff = pressureDiffRaw * (1 - SensitivitySmoothFactor)
+			}
+		}
+
 		headDiff := upWL - downWL
 		designDiff := preset.DesignUpstreamWL - preset.DesignDownstreamWL
 		overload := headDiff / designDiff
 
+		// ===== 修复4: 灵敏度优化 - 风险等级迟滞机制 =====
+		var proposedRisk string
 		switch {
 		case overload > 1.5 || pressureDiff > 0.8:
-			riskLevel = "critical"
-			explanation = fmt.Sprintf("当前水位差%.1fm已超过设计值的%.1f倍，扬压力剧增%.1f%%，存在严重安全风险，建议立即降低水位！",
-				headDiff, overload, pressureDiff*100)
+			proposedRisk = "critical"
 		case overload > 1.2 || pressureDiff > 0.5:
-			riskLevel = "high"
-			explanation = fmt.Sprintf("当前水位差%.1fm超过设计值%.1f%%，扬压力增加%.1f%%，需加强监测",
-				headDiff, (overload-1)*100, pressureDiff*100)
+			proposedRisk = "high"
 		case overload > 1.0 || pressureDiff > 0.2:
-			riskLevel = "medium"
-			explanation = fmt.Sprintf("当前水位差%.1fm略高于设计值，扬压力增加%.1f%%，处于警戒状态",
+			proposedRisk = "medium"
+		default:
+			proposedRisk = "low"
+		}
+
+		riskLevel = applyRiskHysteresis(previousRisk, proposedRisk, overload, pressureDiff)
+		lastRiskLevelStore[req.DamKey] = riskLevel
+
+		switch riskLevel {
+		case "critical":
+			explanation = fmt.Sprintf("当前水位差%.2fm已超过设计值的%.1f倍，扬压力剧增%.1f%%，存在严重安全风险，建议立即降低水位！",
+				headDiff, overload, pressureDiff*100)
+		case "high":
+			explanation = fmt.Sprintf("当前水位差%.2fm超过设计值%.1f%%，扬压力增加%.1f%%，需加强监测",
+				headDiff, (overload-1)*100, pressureDiff*100)
+		case "medium":
+			explanation = fmt.Sprintf("当前水位差%.2fm略高于设计值，扬压力增加%.1f%%，处于警戒状态",
 				headDiff, pressureDiff*100)
 		default:
-			riskLevel = "low"
-			explanation = fmt.Sprintf("当前水位差%.1fm在设计范围内，渗流状态正常，坝体安全", headDiff)
+			explanation = fmt.Sprintf("当前水位差%.2fm在设计范围内，渗流状态正常，坝体安全", headDiff)
 		}
 	}
 
+	// ===== 修复4: 灵敏度优化 - 关键指标精度控制 =====
+	roundTo := func(v float64, places int) float64 {
+		p := math.Pow(10, float64(places))
+		return math.Round(v*p) / p
+	}
+
 	keyMetrics := map[string]float64{
-		"total_seepage_flow_lps":  simResult.TotalSeepageFlow * 1000,
-		"max_pore_pressure_kpa":   simResult.MaxPorePressure,
-		"upstream_wl_m":           upWL,
-		"downstream_wl_m":         downWL,
-		"water_head_difference_m": upWL - downWL,
+		"total_seepage_flow_lps":  roundTo(simResult.TotalSeepageFlow*1000, 4),
+		"max_pore_pressure_kpa":   roundTo(simResult.MaxPorePressure, 2),
+		"upstream_wl_m":           roundTo(upWL, 2),
+		"downstream_wl_m":         roundTo(downWL, 2),
+		"water_head_difference_m": roundTo(upWL-downWL, 2),
 		"grid_count":              float64(simResult.GridCount),
-		"calculation_time_ms":     float64(simResult.CalculationTimeMs),
+		"calculation_time_ms":     roundTo(float64(simResult.CalculationTimeMs), 1),
+		"min_water_level_step_m":  MinWaterLevelStep,
+		"sensitivity_level":       1.0,
 	}
 
 	result := &models.InteractiveAdjustmentResult{
@@ -371,4 +455,43 @@ func InteractiveAdjustment(req *models.InteractiveAdjustmentRequest) (*models.In
 	}
 
 	return result, nil
+}
+
+// ===== 修复4: 新增风险等级迟滞函数 =====
+func applyRiskHysteresis(prevRisk, proposedRisk string, overload, pressureDiff float64) string {
+	riskOrder := map[string]int{"low": 0, "medium": 1, "high": 2, "critical": 3}
+	prevLevel := riskOrder[prevRisk]
+	proposedLevel := riskOrder[proposedRisk]
+
+	// 相同风险或升级直接采用
+	if prevRisk == "" || proposedLevel >= prevLevel {
+		return proposedRisk
+	}
+
+	// 降级时施加迟滞：需要远离边界足够距离才降级
+	triggerBands := map[string]float64{
+		"critical_to_high":    1.4 * HysteresisBandLow,
+		"high_to_medium":      1.15 * HysteresisBandLow,
+		"medium_to_low":       0.95 * HysteresisBandLow,
+	}
+
+	switch prevRisk {
+	case "critical":
+		if overload < triggerBands["critical_to_high"] && pressureDiff < 0.7 {
+			return proposedRisk
+		}
+		return prevRisk
+	case "high":
+		if overload < triggerBands["high_to_medium"] && pressureDiff < 0.45 {
+			return proposedRisk
+		}
+		return prevRisk
+	case "medium":
+		if overload < triggerBands["medium_to_low"] && pressureDiff < 0.18 {
+			return proposedRisk
+		}
+		return prevRisk
+	default:
+		return proposedRisk
+	}
 }

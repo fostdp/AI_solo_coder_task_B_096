@@ -169,27 +169,54 @@ const (
 )
 
 type DamPreset struct {
-	DamKey                   string      `json:"dam_key"`
-	DamName                  string      `json:"dam_name"`
-	DamType                  DamType     `json:"dam_type"`
-	BuildDynasty             string      `json:"build_dynasty"`
-	BuildYear                int         `json:"build_year"`
-	Location                 string      `json:"location"`
-	Description              string      `json:"description"`
-	HistoricalSignificance   string      `json:"historical_significance"`
-	Geometry                 DamGeometry `json:"geometry"`
-	FoundationDepth          float64     `json:"foundation_depth"`
-	DesignUpstreamWL         float64     `json:"design_upstream_wl"`
-	DesignDownstreamWL       float64     `json:"design_downstream_wl"`
-	MaterialType             string      `json:"material_type"`
-	OriginalPermeability     float64     `json:"original_permeability"`
-	CurrentPermeability      float64     `json:"current_permeability"`
-	FoundationPermeability   float64     `json:"foundation_permeability"`
-	InterfacePermeability    float64     `json:"interface_permeability"`
-	HasAntiSeepageSystem     bool        `json:"has_anti_seepage_system"`
-	AntiSeepageDescription   string      `json:"anti_seepage_description"`
-	CulturalValue            string      `json:"cultural_value"`
-	ImageURL                 string      `json:"image_url,omitempty"`
+	DamKey                   string              `json:"dam_key"`
+	DamName                  string              `json:"dam_name"`
+	DamType                  DamType             `json:"dam_type"`
+	BuildDynasty             string              `json:"build_dynasty"`
+	BuildYear                int                 `json:"build_year"`
+	Location                 string              `json:"location"`
+	Description              string              `json:"description"`
+	HistoricalSignificance   string              `json:"historical_significance"`
+	Geometry                 DamGeometry         `json:"geometry"`
+	FoundationDepth          float64             `json:"foundation_depth"`
+	DesignUpstreamWL         float64             `json:"design_upstream_wl"`
+	DesignDownstreamWL       float64             `json:"design_downstream_wl"`
+	MaterialType             string              `json:"material_type"`
+	OriginalPermeability     float64             `json:"original_permeability"`
+	CurrentPermeability      float64             `json:"current_permeability"`
+	FoundationPermeability   float64             `json:"foundation_permeability"`
+	InterfacePermeability    float64             `json:"interface_permeability"`
+	HasAntiSeepageSystem     bool                `json:"has_anti_seepage_system"`
+	AntiSeepageDescription   string              `json:"anti_seepage_description"`
+	CulturalValue            string              `json:"cultural_value"`
+	ImageURL                 string              `json:"image_url,omitempty"`
+	// ===== 修复1: 古代堰坝结构参数现场测绘引用 =====
+	DataSourceType           string              `json:"data_source_type"`           // field_survey(现场测绘)/historical_document(历史文献)/engineering_report(工程报告)/standard_spec(规范)
+	DataAccuracy             string              `json:"data_accuracy"`               // high(±1%)/medium(±5%)/low(±15%)
+	SurveyOrganization       string              `json:"survey_organization"`         // 测绘单位
+	SurveyDate               string              `json:"survey_date"`                 // 测绘日期
+	ReferenceDocument        string              `json:"reference_document"`          // 引用文献/标准编号
+	GeometryUncertainty      DamGeometryUncertainty `json:"geometry_uncertainty"`    // 测量误差范围
+	PermeabilityTestMethod   string              `json:"permeability_test_method"`   // 室内试验/现场抽水试验/钻孔压水试验
+	FieldSurveyCoordinates   [][]float64         `json:"field_survey_coordinates,omitempty"` // 关键测点坐标
+	Remark                   string              `json:"remark,omitempty"`            // 备注
+	// ===== 修复2: 现代坝体标准规范引用 =====
+	DesignStandard           string              `json:"design_standard"`             // 设计规范编号
+	DesignStandardVersion    string              `json:"design_standard_version"`     // 规范版本
+	DamClass                 string              `json:"dam_class"`                   // 坝级别(1-5级)
+	FloodStandard            string              `json:"flood_standard"`              // 防洪标准(如"1000年一遇")
+	SeismicFortensity        int                 `json:"seismic_fortensity"`          // 抗震设防烈度
+	ConcreteGrade            string              `json:"concrete_grade"`              // 混凝土等级
+	DesignCodeCompliance     map[string]bool     `json:"design_code_compliance,omitempty"` // 规范条款符合性
+}
+
+type DamGeometryUncertainty struct {
+	LengthError         float64 `json:"length_error_m"`
+	HeightError         float64 `json:"height_error_m"`
+	TopWidthError       float64 `json:"top_width_error_m"`
+	SlopeError          float64 `json:"slope_error_ratio"`
+	FoundationDepthError float64 `json:"foundation_depth_error_m"`
+	MeasurementMethod   string  `json:"measurement_method"` // GPS_RTK/Total_Station/Drone_Photogrammetry/Historical
 }
 
 type DamGeometry struct {
