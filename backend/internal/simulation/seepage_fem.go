@@ -662,3 +662,250 @@ func (s *SeepageSolver) Run(upstreamWL, downstreamWL float64, name string) (*mod
 	}
 	return s.RunSimulation(req)
 }
+
+// ===== 新增Feature: 从堰坝预设创建求解器 =====
+
+func NewSeepageSolverFromPreset(preset *models.DamPreset) *SeepageSolver {
+	geo := DamGeometry{
+		Length:          preset.Geometry.Length,
+		Height:          preset.Geometry.Height,
+		TopWidth:        preset.Geometry.TopWidth,
+		UpstreamSlope:   preset.Geometry.UpstreamSlope,
+		DownstreamSlope: preset.Geometry.DownstreamSlope,
+		FoundationDepth: preset.FoundationDepth,
+	}
+
+	solver := NewSeepageSolver(geo, preset.CurrentPermeability)
+	solver.FoundationK = preset.FoundationPermeability
+	solver.Interface.ContactPermeability = preset.InterfacePermeability
+	return solver
+}
+
+func NewSeepageSolverFromPresetWithConfig(
+	preset *models.DamPreset,
+	nx, ny int,
+) *SeepageSolver {
+	solver := NewSeepageSolverFromPreset(preset)
+	if nx > 0 {
+		solver.GridNX = nx
+	}
+	if ny > 0 {
+		solver.GridNY = ny
+	}
+	return solver
+}
+
+// ===== 新增Feature: 对比分析辅助方法 =====
+
+func (s *SeepageSolver) GetExitGradient() float64 {
+	if s.GridNY < 2 || s.GridNX < 2 {
+		return 0
+	}
+
+	maxGrad := 0.0
+	downstreamX := int(float64(s.GridNX) * 0.8)
+	for i := downstreamX; i < s.GridNX; i++ {
+		for j := 0; j < s.GridNY; j++ {
+			if !s.IsInDomain[j][i] {
+				continue
+			}
+			if j+1 < s.GridNY && s.IsInDomain[j+1][i] {
+				h1 := s.WaterHead[j][i]
+				h2 := s.WaterHead[j+1][i]
+				dy := s.YCoords[j+1] - s.YCoords[j]
+				if dy > 0 {
+					grad := math.Abs(h2-h1) / dy
+					if grad > maxGrad {
+						maxGrad = grad
+					}
+				}
+			}
+		}
+	}
+	return maxGrad
+}
+
+func (s *SeepageSolver) GetAvgPorePressure() float64 {
+	if s.GridNY < 1 || s.GridNX < 1 {
+		return 0
+	}
+
+	sum := 0.0
+	count := 0
+	for j := 0; j < s.GridNY; j++ {
+		for i := 0; i < s.GridNX; i++ {
+			if s.IsInDomain[j][i] && s.IsDamBody[j][i] {
+				sum += s.PorePressure[j][i]
+				count++
+			}
+		}
+	}
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
+}
+
+func (s *SeepageSolver) GetInfiltrationLinePoints() []models.Point2D {
+	line := s.GetInfiltrationLine()
+	points := make([]models.Point2D, 0, len(line))
+	for _, pt := range line {
+		points = append(points, models.Point2D{X: pt["x"], Y: pt["y"]})
+	}
+	return points
+}
+
+func (s *SeepageSolver) GetUpliftForce() float64 {
+	if s.GridNY < 1 || s.GridNX < 1 {
+		return 0
+	}
+
+	waterDensity := 1000.0
+	gravity := 9.81
+	totalForce := 0.0
+
+	dx := s.Geometry.Length / float64(s.GridNX-1)
+	for j := 0; j < s.GridNY; j++ {
+		for i := 0; i < s.GridNX; i++ {
+			if s.IsInDomain[j][i] && s.IsDamBody[j][i] {
+				pressurePa := s.PorePressure[j][i] * 1000.0
+				area := dx * 1.0
+				totalForce += pressurePa * area
+			}
+		}
+	}
+	_ = waterDensity
+	_ = gravity
+	return totalForce / 1000.0
+}
+
+func (s *SeepageSolver) GetDamWeight() float64 {
+	if s.GridNY < 1 || s.GridNX < 1 {
+		return 0
+	}
+
+	density := 2400.0
+	gravity := 9.81
+	totalWeight := 0.0
+
+	dx := s.Geometry.Length / float64(s.GridNX-1)
+	dy := (s.Geometry.Height + s.Geometry.FoundationDepth) / float64(s.GridNY-1)
+
+	for j := 0; j < s.GridNY; j++ {
+		for i := 0; i < s.GridNX; i++ {
+			if s.IsInDomain[j][i] && s.IsDamBody[j][i] {
+				volume := dx * dy * 1.0
+				totalWeight += density * gravity * volume
+			}
+		}
+	}
+	return totalWeight / 1000.0
+}
+
+func (s *SeepageSolver) GetAntiSlidingSafetyFactor() float64 {
+	uplift := s.GetUpliftForce()
+	weight := s.GetDamWeight()
+	seepageForce := s.TotalSeepageForce()
+	frictionCoeff := 0.65
+
+	if seepageForce <= 0 {
+		return 99.0
+	}
+
+	effectiveWeight := weight - uplift
+	if effectiveWeight <= 0 {
+		return 0
+	}
+
+	return (effectiveWeight * frictionCoeff) / seepageForce
+}
+
+func (s *SeepageSolver) TotalSeepageForce() float64 {
+	if s.GridNY < 1 || s.GridNX < 1 {
+		return 0
+	}
+
+	waterDensity := 1000.0
+	gravity := 9.81
+	totalForce := 0.0
+
+	dx := s.Geometry.Length / float64(s.GridNX-1)
+	dy := (s.Geometry.Height + s.Geometry.FoundationDepth) / float64(s.GridNY-1)
+
+	for j := 0; j < s.GridNY; j++ {
+		for i := 0; i < s.GridNX; i++ {
+			if s.IsInDomain[j][i] {
+				vx := math.Abs(s.VelocityX[j][i])
+				vy := math.Abs(s.VelocityY[j][i])
+				vmag := math.Sqrt(vx*vx + vy*vy)
+				area := dx * dy
+				force := waterDensity * gravity * vmag * vmag * area * 0.5
+				totalForce += force
+			}
+		}
+	}
+	return totalForce / 1000.0
+}
+
+func (s *SeepageSolver) GetSeepageFlowPerMeter() float64 {
+	flow := s.CalculateSeepageFlow()
+	if s.Geometry.Length <= 0 {
+		return 0
+	}
+	return flow / s.Geometry.Length
+}
+
+func (s *SeepageSolver) GetAntiSeepageEfficiency() float64 {
+	if !s.Blanket.Enabled {
+		return 0
+	}
+
+	baselineSolver := &SeepageSolver{
+		Geometry:      s.Geometry,
+		PermeabilityK: s.PermeabilityK,
+		FoundationK:   s.FoundationK,
+		GridNX:        s.GridNX,
+		GridNY:        s.GridNY,
+		Blanket:       BlanketConfig{Enabled: false},
+		Interface:     s.Interface,
+		UpstreamH:     s.UpstreamH,
+		DownstreamH:   s.DownstreamH,
+	}
+
+	baselineSolver.InitializeGrid()
+	baselineSolver.SetBoundaryConditions()
+	_, _ = baselineSolver.SolveSteady(500, 1e-5)
+	baselineFlow := baselineSolver.CalculateSeepageFlow()
+
+	currentFlow := s.CalculateSeepageFlow()
+	if baselineFlow <= 0 {
+		return 0
+	}
+	return (baselineFlow - currentFlow) / baselineFlow * 100.0
+}
+
+func (s *SeepageSolver) RunComparison(upWL, downWL float64) (*models.DamComparisonItem, *models.SeepageSimulation, []models.SimulationGrid) {
+	s.SetWaterLevels(upWL, downWL)
+
+	simResult, grids, err := s.Run(upWL, downWL, "comparison")
+	if err != nil {
+		return nil, nil, nil
+	}
+
+	item := &models.DamComparisonItem{
+		Permeability:        s.PermeabilityK,
+		TotalSeepageFlow:    simResult.TotalSeepageFlow,
+		SeepageFlowPerMeter: s.GetSeepageFlowPerMeter(),
+		MaxPorePressure:     simResult.MaxPorePressure,
+		AvgPorePressure:     s.GetAvgPorePressure(),
+		InfiltrationLine:    s.GetInfiltrationLinePoints(),
+		ExitGradient:        s.GetExitGradient(),
+		UpliftForce:         s.GetUpliftForce(),
+		AntiSeepageEfficiency: s.GetAntiSeepageEfficiency(),
+		Simulation:          simResult,
+		Grids:               grids,
+	}
+
+	return item, simResult, grids
+}
+

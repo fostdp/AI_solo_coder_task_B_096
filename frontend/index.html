@@ -158,6 +158,9 @@
                 <button class="tab-btn" data-tab="simulations">📋 仿真历史</button>
                 <button class="tab-btn" data-tab="optimizations">📈 优化记录</button>
                 <button class="tab-btn" data-tab="sensors">📡 传感器列表</button>
+                <button class="tab-btn" data-tab="comparison">⚖️ 堰坝对比</button>
+                <button class="tab-btn" data-tab="aging">⏳ 老化预测</button>
+                <button class="tab-btn" data-tab="tour">🎯 虚拟参观</button>
             </div>
 
             <div class="tab-content active" id="tab-3dview">
@@ -279,6 +282,293 @@
                     </table>
                 </div>
             </div>
+
+            <!-- ===== 新增Feature: 堰坝对比标签页 ===== -->
+            <div class="tab-content" id="tab-comparison">
+                <div class="comparison-container">
+                    <div class="panel comparison-controls">
+                        <h3>⚖️ 多堰坝防渗结构对比分析</h3>
+                        <div class="control-row">
+                            <div class="control-group">
+                                <label>选择堰坝（可多选）:</label>
+                                <div id="damSelector" class="dam-selector">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="control-row">
+                            <div class="control-group">
+                                <label>上游水位 (m):</label>
+                                <input type="number" id="cmpUpstream" value="8.5" step="0.1" min="0">
+                            </div>
+                            <div class="control-group">
+                                <label>下游水位 (m):</label>
+                                <input type="number" id="cmpDownstream" value="3.2" step="0.1" min="0">
+                            </div>
+                            <div class="control-group">
+                                <label>网格分辨率:</label>
+                                <select id="cmpResolution">
+                                    <option value="40">低 (40×20)</option>
+                                    <option value="60" selected>中 (60×30)</option>
+                                    <option value="80">高 (80×40)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="control-row">
+                            <div class="control-group checkbox-group">
+                                <label><input type="checkbox" id="cmpIncludeAging"> 考虑当前老化程度</label>
+                            </div>
+                        </div>
+                        <div class="button-row">
+                            <button class="btn btn-primary" id="btnCompareDams">🔍 开始对比分析</button>
+                            <button class="btn btn-info" id="btnCrossEra">🏛️↔️🏢 跨时代对比</button>
+                        </div>
+                    </div>
+
+                    <div id="comparisonSummary" class="panel comparison-summary" style="display:none">
+                        <h4>📊 对比分析摘要</h4>
+                        <div id="summaryContent"></div>
+                    </div>
+
+                    <div class="comparison-results">
+                        <div class="chart-row">
+                            <div class="chart-container">
+                                <h4>📈 渗流量对比 (L/s)</h4>
+                                <canvas id="seepageCompareChart"></canvas>
+                            </div>
+                            <div class="chart-container">
+                                <h4>📉 扬压力对比 (kPa)</h4>
+                                <canvas id="pressureCompareChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="chart-row">
+                            <div class="chart-container full-width">
+                                <h4>📐 防渗效率对比 (%)</h4>
+                                <canvas id="efficiencyCompareChart"></canvas>
+                            </div>
+                        </div>
+                        <div id="comparisonCards" class="comparison-cards">
+                        </div>
+                    </div>
+
+                    <div id="crossEraResult" class="cross-era-result" style="display:none">
+                        <h3>🏛️ 跨时代水利工程技术对比</h3>
+                        <div class="era-comparison">
+                            <div class="era-card ancient">
+                                <h4>🏯 古代坝</h4>
+                                <div id="ancientDamInfo"></div>
+                            </div>
+                            <div class="era-vs">VS</div>
+                            <div class="era-card modern">
+                                <h4>🏢 现代坝</h4>
+                                <div id="modernDamInfo"></div>
+                            </div>
+                        </div>
+                        <div class="insights-panel">
+                            <h4>💡 对比洞察</h4>
+                            <ul id="crossEraInsights"></ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== 新增Feature: 老化预测标签页 ===== -->
+            <div class="tab-content" id="tab-aging">
+                <div class="aging-container">
+                    <div class="panel aging-controls">
+                        <h3>⏳ 坝体老化渗透系数演变预测</h3>
+                        <div class="control-row">
+                            <div class="control-group">
+                                <label>选择堰坝:</label>
+                                <select id="agingDamSelect">
+                                </select>
+                            </div>
+                            <div class="control-group">
+                                <label>预测年限:</label>
+                                <input type="number" id="agingYears" value="100" step="10" min="10" max="500">
+                            </div>
+                            <div class="control-group">
+                                <label>时间步长:</label>
+                                <select id="agingStep">
+                                    <option value="5">5年</option>
+                                    <option value="10" selected>10年</option>
+                                    <option value="20">20年</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="control-row">
+                            <div class="control-group">
+                                <label>初始渗透系数 (m/s):</label>
+                                <input type="number" id="agingInitialK" value="1e-7" step="1e-8" min="1e-12">
+                            </div>
+                            <div class="control-group">
+                                <label>维护频率:</label>
+                                <select id="agingMaintenance">
+                                    <option value="none">无维护</option>
+                                    <option value="low">低</option>
+                                    <option value="medium" selected>中等</option>
+                                    <option value="high">高</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="control-row">
+                            <div class="control-group checkbox-group">
+                                <label><input type="checkbox" id="agingConsiderClimate" checked> 考虑气候变化</label>
+                            </div>
+                            <div class="control-group checkbox-group">
+                                <label><input type="checkbox" id="agingConsiderMaintenance" checked> 考虑维护效果</label>
+                            </div>
+                        </div>
+                        <div class="button-row">
+                            <button class="btn btn-primary" id="btnPredictAging">🔮 开始预测</button>
+                            <button class="btn btn-secondary" id="btnCompareScenarios">📊 多情景对比</button>
+                        </div>
+                    </div>
+
+                    <div id="agingSummary" class="panel aging-summary" style="display:none">
+                        <h4>📋 预测摘要</h4>
+                        <div id="agingSummaryContent"></div>
+                    </div>
+
+                    <div class="aging-results">
+                        <div class="chart-row">
+                            <div class="chart-container">
+                                <h4>📈 渗透系数演变 (m/s)</h4>
+                                <canvas id="permeabilityChart"></canvas>
+                            </div>
+                            <div class="chart-container">
+                                <h4>💧 渗流量演变 (L/s)</h4>
+                                <canvas id="agingFlowChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="chart-row">
+                            <div class="chart-container">
+                                <h4>⚠️ 失效概率演变 (%)</h4>
+                                <canvas id="failureProbChart"></canvas>
+                            </div>
+                            <div class="chart-container">
+                                <h4>📉 老化程度 (%)</h4>
+                                <canvas id="agingDegreeChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <h4>📅 详细预测数据</h4>
+                            <table class="data-table" id="agingDataTable">
+                                <thead>
+                                    <tr>
+                                        <th>年份</th>
+                                        <th>坝龄(年)</th>
+                                        <th>渗透系数(m/s)</th>
+                                        <th>渗流量(L/s)</th>
+                                        <th>最大扬压力(kPa)</th>
+                                        <th>老化程度(%)</th>
+                                        <th>失效概率</th>
+                                        <th>建议措施</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="agingTableBody">
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="agingRecommendations" class="aging-recommendations">
+                            <h4>💡 维护建议</h4>
+                            <ul id="recommendationList"></ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== 新增Feature: 虚拟参观标签页 ===== -->
+            <div class="tab-content" id="tab-tour">
+                <div class="tour-container">
+                    <div class="tour-main">
+                        <div class="tour-canvas-container">
+                            <div id="tourCanvasContainer"></div>
+                            <div class="tour-controls">
+                                <div class="scene-nav">
+                                    <button class="btn btn-secondary" id="prevScene">⬅️ 上一场景</button>
+                                    <span id="sceneIndicator" class="scene-indicator">1 / 5</span>
+                                    <button class="btn btn-secondary" id="nextScene">下一场景 ➡️</button>
+                                </div>
+                                <div class="narrative-box">
+                                    <h4 id="sceneTitle">它山堰全景</h4>
+                                    <p id="sceneNarrative">欢迎来到它山堰虚拟参观...</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tour-sidebar">
+                            <div class="panel">
+                                <h3>🌊 水位交互调节</h3>
+                                <div class="control-group">
+                                    <label>上游水位 (m):</label>
+                                    <input type="range" id="tourUpstream" min="0" max="15" step="0.1" value="8.5">
+                                    <span id="tourUpstreamValue" class="range-value">8.5 m</span>
+                                </div>
+                                <div class="control-group">
+                                    <label>下游水位 (m):</label>
+                                    <input type="range" id="tourDownstream" min="0" max="10" step="0.1" value="3.2">
+                                    <span id="tourDownstreamValue" class="range-value">3.2 m</span>
+                                </div>
+                                <div class="control-group">
+                                    <label>高亮区域:</label>
+                                    <select id="tourHighlight">
+                                        <option value="none">无</option>
+                                        <option value="upstream">上游区域</option>
+                                        <option value="downstream">下游区域</option>
+                                        <option value="foundation">坝基</option>
+                                        <option value="blanket">防渗铺盖</option>
+                                    </select>
+                                </div>
+                                <div class="control-group">
+                                    <label>可视化模式:</label>
+                                    <select id="tourVizMode">
+                                        <option value="both">压力云图+流线</option>
+                                        <option value="pressure">仅压力云图</option>
+                                        <option value="streamline">仅流线</option>
+                                        <option value="velocity">流速矢量</option>
+                                    </select>
+                                </div>
+                                <div class="control-group checkbox-group">
+                                    <label><input type="checkbox" id="tourShowSeepage" checked> 显示渗流</label>
+                                </div>
+                                <div class="control-group checkbox-group">
+                                    <label><input type="checkbox" id="tourShowSensors" checked> 显示传感器</label>
+                                </div>
+                                <button class="btn btn-primary btn-block" id="btnApplyWaterLevel">✅ 应用水位变化</button>
+                            </div>
+                            <div class="panel tour-stats" id="tourStats" style="display:none">
+                                <h4>📊 实时渗流状态</h4>
+                                <div id="tourRiskLevel" class="risk-level low">安全</div>
+                                <div class="stat-grid">
+                                    <div class="stat-item">
+                                        <span class="stat-label">渗流量</span>
+                                        <span class="stat-value" id="tourStatFlow">-- L/s</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">最大扬压力</span>
+                                        <span class="stat-value" id="tourStatPressure">-- kPa</span>
+                                    </div>
+                                    <div class="stat-item">
+                                        <span class="stat-label">水位差</span>
+                                        <span class="stat-value" id="tourStatHead">-- m</span>
+                                    </div>
+                                </div>
+                                <p id="tourExplanation" class="explanation"></p>
+                            </div>
+                            <div class="panel">
+                                <h4>📍 场景列表</h4>
+                                <div id="sceneList" class="scene-list">
+                                </div>
+                            </div>
+                            <div class="panel">
+                                <h4>🔍 热点</h4>
+                                <div id="hotspotList" class="hotspot-list">
+                                    <p class="text-center">点击场景中的标记点查看详情</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </main>
     </div>
 
@@ -306,6 +596,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="js/tuoshan_dam_3d.js"></script>
     <script src="js/seepage_panel.js"></script>
+    <script src="js/features.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

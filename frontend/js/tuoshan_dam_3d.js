@@ -1053,4 +1053,277 @@ class TuoshanDam3D {
 
         this.renderer.render(this.scene, this.camera);
     }
+
+    setCamera(posX, posY, posZ, targetX, targetY, targetZ) {
+        this.camera.position.set(posX, posY, posZ);
+        this.camera.lookAt(targetX, targetY, targetZ);
+    }
+
+    setStreamlinesVisible(visible) {
+        this.options.showStreamlines = visible;
+        if (this.particleSystem) {
+            this.particleSystem.visible = visible;
+        }
+    }
+
+    setPressureCloudVisible(visible) {
+        this.options.showPressureCloud = visible;
+        if (this.gridMesh) {
+            this.gridMesh.visible = visible;
+        }
+        if (this.options.showPressureCloud && this.simulationData) {
+            this.updatePressureCloud(this.simulationData);
+        }
+    }
+
+    setSensorsVisible(visible) {
+        this.options.showSensors = visible;
+        this.updateSensorMarkers(this.sensorConfigs, this.sensorDataMap);
+    }
+
+    highlightArea(area) {
+        if (!this.damGroup) return;
+
+        this.damGroup.traverse((obj) => {
+            if (obj.material && obj.material.emissive) {
+                obj.material.emissive.setHex(0x000000);
+            }
+        });
+
+        if (!area || area === 'none') return;
+
+        const highlightEmissive = new THREE.Color(0xffdd00);
+        const highlightOpacity = 1.0;
+
+        if (area === 'core_wall') {
+            this.damGroup.traverse((obj) => {
+                if (obj.material && obj.material.color &&
+                    obj.material.color.getHex() === 0x5c3a1e) {
+                    obj.material.emissive = highlightEmissive;
+                    obj.material.emissiveIntensity = 0.4;
+                    obj.material.opacity = highlightOpacity;
+                }
+            });
+        } else if (area === 'upstream_side') {
+            const topCenterX = this.damLength / 2;
+            this.damGroup.traverse((obj) => {
+                if (obj.position && obj.position.x < topCenterX - 2 && obj.material) {
+                    if (obj.material.emissive) {
+                        obj.material.emissive = highlightEmissive;
+                        obj.material.emissiveIntensity = 0.3;
+                    }
+                }
+            });
+        } else if (area === 'downstream_side') {
+            const topCenterX = this.damLength / 2;
+            this.damGroup.traverse((obj) => {
+                if (obj.position && obj.position.x > topCenterX + 2 && obj.material) {
+                    if (obj.material.emissive) {
+                        obj.material.emissive = highlightEmissive;
+                        obj.material.emissiveIntensity = 0.3;
+                    }
+                }
+            });
+        } else if (area === 'foundation') {
+            this.scene.traverse((obj) => {
+                if (obj.material && obj.material.color &&
+                    obj.material.color.getHex() === 0x4a4a3e) {
+                    if (obj.material.emissive) {
+                        obj.material.emissive = highlightEmissive;
+                        obj.material.emissiveIntensity = 0.3;
+                    }
+                }
+            });
+        } else if (area === 'toe_drain') {
+            this.damGroup.traverse((obj) => {
+                if (obj.position && obj.position.y < 0.5 &&
+                    obj.position.x > this.damLength * 0.6 && obj.material) {
+                    if (obj.material.emissive) {
+                        obj.material.emissive = highlightEmissive;
+                        obj.material.emissiveIntensity = 0.4;
+                    }
+                }
+            });
+        }
+    }
+
+    updateSimulationData(grids, simulation) {
+        this.simulationData = { grids, simulation };
+        this.updatePressureCloud(this.simulationData);
+    }
+
+    switchDamType(damKey) {
+        const damPresets = {
+            tashan_weir: {
+                length: 113.7,
+                height: 3.85,
+                topWidth: 4.8,
+                upstreamSlope: 0.35,
+                downstreamSlope: 0.6,
+                foundationDepth: 5.0,
+                damColor: 0x8b7355,
+                coreColor: 0x6b4423,
+                coreWidth: 1.5,
+                hasCoreWall: true,
+                stonePattern: 'irregular'
+            },
+            mulan_bei: {
+                length: 219,
+                height: 7.5,
+                topWidth: 6.0,
+                upstreamSlope: 0.4,
+                downstreamSlope: 0.7,
+                foundationDepth: 6.0,
+                damColor: 0x9a8b7a,
+                coreColor: 0x5c4033,
+                coreWidth: 2.0,
+                hasCoreWall: true,
+                stonePattern: 'granite'
+            },
+            yuliang_ba: {
+                length: 138,
+                height: 5.5,
+                topWidth: 5.5,
+                upstreamSlope: 0.3,
+                downstreamSlope: 0.65,
+                foundationDepth: 5.5,
+                damColor: 0x7a6b5a,
+                coreColor: 0x4a3728,
+                coreWidth: 1.8,
+                hasCoreWall: true,
+                stonePattern: 'dovetail'
+            },
+            modern_gravity: {
+                length: 113.7,
+                height: 15,
+                topWidth: 8.0,
+                upstreamSlope: 0.1,
+                downstreamSlope: 0.75,
+                foundationDepth: 8.0,
+                damColor: 0x888888,
+                coreColor: 0x666666,
+                coreWidth: 0.5,
+                hasCoreWall: false,
+                stonePattern: 'smooth'
+            }
+        };
+
+        const preset = damPresets[damKey] || damPresets.tashan_weir;
+
+        this.damLength = preset.length;
+        this.damHeight = preset.height;
+        this.damTopWidth = preset.topWidth;
+        this.upstreamSlope = preset.upstreamSlope;
+        this.downstreamSlope = preset.downstreamSlope;
+        this.foundationDepth = preset.foundationDepth;
+        this.currentDamPreset = preset;
+
+        if (this.damGroup) {
+            this.scene.remove(this.damGroup);
+            this.damGroup.traverse((obj) => {
+                if (obj.geometry) obj.geometry.dispose();
+                if (obj.material) {
+                    if (Array.isArray(obj.material)) {
+                        obj.material.forEach(m => m.dispose());
+                    } else {
+                        obj.material.dispose();
+                    }
+                }
+            });
+        }
+
+        if (this.blanketMesh) {
+            this.scene.remove(this.blanketMesh);
+            this.blanketMesh.geometry.dispose();
+            this.blanketMesh.material.dispose();
+        }
+
+        this.buildDamGeometry();
+        this.buildFoundation();
+        this.buildWater();
+
+        if (this.simulationData) {
+            this.updatePressureCloud(this.simulationData);
+        }
+
+        this.updateSensorMarkers(this.sensorConfigs, this.sensorDataMap);
+
+        this.camera.lookAt(this.damLength / 2, 1, 0);
+    }
+
+    getDamMetrics() {
+        return {
+            length: this.damLength,
+            height: this.damHeight,
+            topWidth: this.damTopWidth,
+            upstreamWL: this.upstreamWL,
+            downstreamWL: this.downstreamWL
+        };
+    }
+
+    animateCameraTo(posX, posY, posZ, targetX, targetY, targetZ, duration) {
+        duration = duration || 2000;
+        const startPos = this.camera.position.clone();
+        const endPos = new THREE.Vector3(posX, posY, posZ);
+        const startTarget = new THREE.Vector3();
+        this.camera.getWorldDirection(startTarget);
+        startTarget.add(this.camera.position);
+        const endTarget = new THREE.Vector3(targetX, targetY, targetZ);
+
+        const startTime = Date.now();
+
+        const animate = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(1, elapsed / duration);
+            const easeProgress = 1 - Math.pow(1 - progress, 3);
+
+            this.camera.position.lerpVectors(startPos, endPos, easeProgress);
+            const currentTarget = startTarget.clone().lerp(endTarget, easeProgress);
+            this.camera.lookAt(currentTarget);
+
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            }
+        };
+        animate();
+    }
+
+    enableAutoRotate(enabled, speed) {
+        this.autoRotate = enabled;
+        this.autoRotateSpeed = speed || 0.001;
+
+        if (enabled && !this.autoRotateBound) {
+            this.autoRotateBound = () => {
+                if (this.autoRotate && this.camera) {
+                    const center = new THREE.Vector3(this.damLength / 2, 1, 0);
+                    const spherical = new THREE.Spherical();
+                    spherical.setFromVector3(this.camera.position.clone().sub(center));
+                    spherical.theta += this.autoRotateSpeed;
+                    this.camera.position.setFromSpherical(spherical).add(center);
+                    this.camera.lookAt(center);
+                }
+                if (this.autoRotate) {
+                    requestAnimationFrame(this.autoRotateBound);
+                }
+            };
+            this.autoRotateBound();
+        }
+    }
+
+    showLegend(show) {
+        const legend = document.getElementById('pressureLegend');
+        if (legend) {
+            legend.style.display = show ? 'block' : 'none';
+        }
+    }
+
+    resetView() {
+        this.camera.position.set(90, 35, 80);
+        this.camera.lookAt(this.damLength / 2, 0, 0);
+    }
+
+    takeScreenshot() {
+        this.renderer.render(this.scene, this.camera);
+        return this.renderer.domElement.toDataURL('image/png');
+    }
 }

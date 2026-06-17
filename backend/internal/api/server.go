@@ -17,8 +17,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"tashan-weir-seepage/internal/aging"
 	"tashan-weir-seepage/internal/alarm_mqtt"
 	"tashan-weir-seepage/internal/anti_seepage_optimizer"
+	"tashan-weir-seepage/internal/comparison"
+	"tashan-weir-seepage/internal/dam_presets"
 	"tashan-weir-seepage/internal/database"
 	"tashan-weir-seepage/internal/dtu_receiver"
 	"tashan-weir-seepage/internal/message"
@@ -250,6 +253,34 @@ func (s *Server) setupRoutes() {
 
 	api.GET("/alarms", s.handleGetAlarms)
 	api.PUT("/alarms/:id/handle", s.handleAcknowledgeAlarm)
+
+	// ===== 新增Feature: 多堰坝管理 =====
+	dams := api.Group("/dams")
+	{
+		dams.GET("", s.handleGetAllDams)
+		dams.GET("/:key", s.handleGetDam)
+		dams.GET("/:key/virtual-tour", s.handleGetVirtualTourScenes)
+	}
+
+	// ===== 新增Feature: 对比分析 =====
+	compare := api.Group("/compare")
+	{
+		compare.POST("/dams", s.handleCompareDams)
+		compare.POST("/cross-era", s.handleCrossEraComparison)
+	}
+
+	// ===== 新增Feature: 老化预测 =====
+	aging := api.Group("/aging")
+	{
+		aging.POST("/predict", s.handlePredictAging)
+		aging.POST("/scenarios", s.handleCompareAgingScenarios)
+	}
+
+	// ===== 新增Feature: 虚拟参观交互 =====
+	interactive := api.Group("/interactive")
+	{
+		interactive.POST("/adjust", s.handleInteractiveAdjustment)
+	}
 
 	frontendPath := resolveFrontendPath()
 	s.router.Static("/frontend", frontendPath)
@@ -591,4 +622,127 @@ func (s *Server) handleAcknowledgeAlarm(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "acknowledged", "alarm_id": id})
+}
+
+// ===== 新增Feature: 多堰坝管理 Handlers =====
+
+func (s *Server) handleGetAllDams(c *gin.Context) {
+	dams := dam_presets.GetAllDamPresets()
+	c.JSON(http.StatusOK, gin.H{
+		"count": len(dams),
+		"dams":  dams,
+	})
+}
+
+func (s *Server) handleGetDam(c *gin.Context) {
+	damKey := c.Param("key")
+	preset := dam_presets.GetDamPreset(damKey)
+	if preset == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "dam not found"})
+		return
+	}
+	c.JSON(http.StatusOK, preset)
+}
+
+func (s *Server) handleGetVirtualTourScenes(c *gin.Context) {
+	damKey := c.Param("key")
+	scenes := dam_presets.GetVirtualTourScenes(damKey)
+	if scenes == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "virtual tour not available for this dam"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"dam_key": damKey,
+		"scenes":  scenes,
+		"count":   len(scenes),
+	})
+}
+
+// ===== 新增Feature: 对比分析 Handlers =====
+
+func (s *Server) handleCompareDams(c *gin.Context) {
+	var req models.DamComparisonRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := comparison.CompareDams(&req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) handleCrossEraComparison(c *gin.Context) {
+	var req models.CrossEraComparisonRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := comparison.CrossEraComparison(&req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// ===== 新增Feature: 老化预测 Handlers =====
+
+func (s *Server) handlePredictAging(c *gin.Context) {
+	var req models.AgingPredictionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := aging.PredictAging(&req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) handleCompareAgingScenarios(c *gin.Context) {
+	var req models.AgingPredictionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	results, err := aging.CompareAgingScenarios(req.DamKey, &req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"scenarios": results,
+		"count":     len(results),
+	})
+}
+
+// ===== 新增Feature: 虚拟参观交互 Handlers =====
+
+func (s *Server) handleInteractiveAdjustment(c *gin.Context) {
+	var req models.InteractiveAdjustmentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := comparison.InteractiveAdjustment(&req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
 }
