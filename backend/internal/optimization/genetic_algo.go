@@ -10,30 +10,51 @@ import (
 	"tashan-weir-seepage/pkg/utils"
 )
 
+type CostConfig struct {
+	ConcreteUnitPrice  float64
+	ClayUnitPrice      float64
+	GeomembraneUnitPrice float64
+	ExcavationUnitPrice  float64
+	MaxBudget          float64
+}
+
 type Individual struct {
 	BlanketLength    float64
 	BlanketThickness float64
 	Fitness          float64
 	SeepageFlow      float64
+	MaterialCost     float64
 	Valid            bool
+	Rank             int
+	CrowdingDistance  float64
+}
+
+type ParetoSolution struct {
+	BlanketLength    float64
+	BlanketThickness float64
+	SeepageFlow      float64
+	MaterialCost     float64
+	FlowReduction    float64
 }
 
 type GeneticOptimizer struct {
-	PopulationSize     int
-	MaxGenerations     int
-	MutationRate       float64
-	CrossoverRate      float64
-	TournamentSize     int
-	MinBlanketLength   float64
-	MaxBlanketLength   float64
+	PopulationSize      int
+	MaxGenerations      int
+	MutationRate        float64
+	CrossoverRate       float64
+	TournamentSize      int
+	MinBlanketLength    float64
+	MaxBlanketLength    float64
 	MinBlanketThickness float64
 	MaxBlanketThickness float64
 	BlanketPermeability float64
-	BaseSolver         *simulation.SeepageSolver
-	UpstreamH          float64
-	DownstreamH        float64
+	BaseSolver          *simulation.SeepageSolver
+	UpstreamH           float64
+	DownstreamH         float64
 	ConvergenceCurve   []float64
-	rand               *utils.Rand
+	CostConfig          CostConfig
+	ParetoFront         []ParetoSolution
+	rand                *utils.Rand
 }
 
 func NewGeneticOptimizer(geo simulation.DamGeometry, basePermeability float64) *GeneticOptimizer {
@@ -53,6 +74,13 @@ func NewGeneticOptimizer(geo simulation.DamGeometry, basePermeability float64) *
 		BlanketPermeability: basePermeability * 0.01,
 		BaseSolver:          solver,
 		rand:                utils.NewRand(),
+		CostConfig: CostConfig{
+			ConcreteUnitPrice:    350.0,
+			ClayUnitPrice:        120.0,
+			GeomembraneUnitPrice: 85.0,
+			ExcavationUnitPrice:  45.0,
+			MaxBudget:            500000.0,
+		},
 	}
 }
 
@@ -102,22 +130,226 @@ func (ga *GeneticOptimizer) evaluateIndividual(ind *Individual) {
 	if err != nil {
 		ind.Valid = false
 		ind.Fitness = 1e20
+		ind.Rank = 999
 		return
 	}
 
 	ind.SeepageFlow = simResult.TotalSeepageFlow
+	ind.MaterialCost = ga.calculateMaterialCost(ind.BlanketLength, ind.BlanketThickness)
 	ind.Valid = true
 
-	volume := ind.BlanketLength * ind.BlanketThickness
-	maxVolume := ga.MaxBlanketLength * ga.MaxBlanketThickness
+	if ga.CostConfig.MaxBudget > 0 && ind.MaterialCost > ga.CostConfig.MaxBudget {
+		ind.Valid = false
+		ind.Fitness = 1e20
+		ind.Rank = 998
+		return
+	}
 
-	flowWeight := 0.7
-	costWeight := 0.3
+	ind.Rank = 0
+	ind.CrowdingDistance = 0
+	ind.Fitness = 0
+}
 
-	normalizedFlow := ind.SeepageFlow * 1e6
-	normalizedCost := (volume / maxVolume) * 100
+func (ga *GeneticOptimizer) calculateMaterialCost(length, thickness float64) float64 {
+	blanketArea := length * thickness * 15.0
+	clayVolume := length * thickness * 15.0
+	excavationVolume := length * 1.0 * 15.0
 
-	ind.Fitness = flowWeight*normalizedFlow + costWeight*normalizedCost
+	geomembraneArea := length * 15.0
+
+	cost := 0.0
+	cost += blanketArea * ga.CostConfig.ConcreteUnitPrice
+	cost += clayVolume * ga.CostConfig.ClayUnitPrice
+	cost += geomembraneArea * ga.CostConfig.GeomembraneUnitPrice
+	cost += excavationVolume * ga.CostConfig.ExcavationUnitPrice
+
+	return cost
+}
+
+func (ga *GeneticOptimizer) dominates(a, b Individual) bool {
+	if !a.Valid && b.Valid {
+		return false
+	}
+	if a.Valid && !b.Valid {
+		return true
+	}
+	if !a.Valid && !b.Valid {
+		return false
+	}
+
+	aBetterFlow := a.SeepageFlow < b.SeepageFlow
+	aBetterCost := a.MaterialCost < b.MaterialCost
+	aEqualFlow := math.Abs(a.SeepageFlow-b.SeepageFlow) < 1e-15
+	aEqualCost := math.Abs(a.MaterialCost-b.MaterialCost) < 1e-6
+
+	if (aBetterFlow || aEqualFlow) && (aBetterCost || aEqualCost) && !(aEqualFlow && aEqualCost) {
+		return true
+	}
+	return false
+}
+
+func (ga *GeneticOptimizer) fastNonDominatedSort(population []Individual) [][]int {
+	n := len(population)
+	dominationCount := make([]int, n)
+	dominatedSet := make([][]int, n)
+	ranks := make([][]int, 0)
+
+	for i := 0; i < n; i++ {
+		dominatedSet[i] = make([]int, 0)
+		dominationCount[i] = 0
+	}
+
+	for i := 0; i < n; i++ {
+		for j := i + 1; j < n; j++ {
+			if ga.dominates(population[i], population[j]) {
+				dominatedSet[i] = append(dominatedSet[i], j)
+				dominationCount[j]++
+			} else if ga.dominates(population[j], population[i]) {
+				dominatedSet[j] = append(dominatedSet[j], i)
+				dominationCount[i]++
+			}
+		}
+	}
+
+	currentFront := make([]int, 0)
+	for i := 0; i < n; i++ {
+		if dominationCount[i] == 0 {
+			population[i].Rank = 0
+			currentFront = append(currentFront, i)
+		}
+	}
+
+	rank := 0
+	for len(currentFront) > 0 {
+		ranks = append(ranks, make([]int, len(currentFront)))
+		copy(ranks[rank], currentFront)
+
+		nextFront := make([]int, 0)
+		for _, i := range currentFront {
+			for _, j := range dominatedSet[i] {
+				dominationCount[j]--
+				if dominationCount[j] == 0 {
+					population[j].Rank = rank + 1
+					nextFront = append(nextFront, j)
+				}
+			}
+		}
+
+		rank++
+		currentFront = nextFront
+	}
+
+	return ranks
+}
+
+func (ga *GeneticOptimizer) crowdingDistanceAssignment(population []Individual, front []int) {
+	if len(front) <= 2 {
+		for _, idx := range front {
+			population[idx].CrowdingDistance = 1e18
+		}
+		return
+	}
+
+	for _, idx := range front {
+		population[idx].CrowdingDistance = 0
+	}
+
+	objectives := []func(Individual) float64{
+		func(ind Individual) float64 { return ind.SeepageFlow },
+		func(ind Individual) float64 { return ind.MaterialCost },
+	}
+
+	for _, objFn := range objectives {
+		sorted := make([]int, len(front))
+		copy(sorted, front)
+		for i := 0; i < len(sorted)-1; i++ {
+			for j := i + 1; j < len(sorted); j++ {
+				if objFn(population[sorted[i]]) > objFn(population[sorted[j]]) {
+					sorted[i], sorted[j] = sorted[j], sorted[i]
+				}
+			}
+		}
+
+		objMin := objFn(population[sorted[0]])
+		objMax := objFn(population[sorted[len(sorted)-1]])
+		objRange := objMax - objMin
+
+		population[sorted[0]].CrowdingDistance = 1e18
+		population[sorted[len(sorted)-1]].CrowdingDistance = 1e18
+
+		if objRange > 0 {
+			for i := 1; i < len(sorted)-1; i++ {
+				prev := objFn(population[sorted[i-1]])
+				next := objFn(population[sorted[i+1]])
+				population[sorted[i]].CrowdingDistance += (next - prev) / objRange
+			}
+		}
+	}
+}
+
+func (ga *GeneticOptimizer) nsga2TournamentSelect(population []Individual) Individual {
+	bestIdx := ga.rand.Intn(len(population))
+	for i := 1; i < ga.TournamentSize; i++ {
+		idx := ga.rand.Intn(len(population))
+		if ga.nsga2Compare(population[idx], population[bestIdx]) < 0 {
+			bestIdx = idx
+		}
+	}
+	return population[bestIdx]
+}
+
+func (ga *GeneticOptimizer) nsga2Compare(a, b Individual) int {
+	if !a.Valid && b.Valid {
+		return 1
+	}
+	if a.Valid && !b.Valid {
+		return -1
+	}
+	if !a.Valid && !b.Valid {
+		return 0
+	}
+
+	if a.Rank < b.Rank {
+		return -1
+	}
+	if a.Rank > b.Rank {
+		return 1
+	}
+
+	if a.CrowdingDistance > b.CrowdingDistance {
+		return -1
+	}
+	if a.CrowdingDistance < b.CrowdingDistance {
+		return 1
+	}
+	return 0
+}
+
+func (ga *GeneticOptimizer) extractParetoFront(population []Individual, baselineFlow float64) []ParetoSolution {
+	fronts := ga.fastNonDominatedSort(population)
+	if len(fronts) == 0 {
+		return nil
+	}
+
+	var pareto []ParetoSolution
+	for _, idx := range fronts[0] {
+		ind := population[idx]
+		if !ind.Valid {
+			continue
+		}
+		reduction := 0.0
+		if baselineFlow > 0 {
+			reduction = (baselineFlow - ind.SeepageFlow) / baselineFlow * 100
+		}
+		pareto = append(pareto, ParetoSolution{
+			BlanketLength:    ind.BlanketLength,
+			BlanketThickness: ind.BlanketThickness,
+			SeepageFlow:      ind.SeepageFlow,
+			MaterialCost:     ind.MaterialCost,
+			FlowReduction:    reduction,
+		})
+	}
+	return pareto
 }
 
 func (ga *GeneticOptimizer) createInitialPopulation() []Individual {
@@ -237,19 +469,19 @@ func (ga *GeneticOptimizer) Optimize(req models.OptimizationRequest) (*models.Op
 		ga.evaluateIndividual(&population[i])
 	}
 
-	bestOverall := ga.getBestIndividual(population)
+	fronts := ga.fastNonDominatedSort(population)
+	for _, front := range fronts {
+		ga.crowdingDistanceAssignment(population, front)
+	}
+
+	ga.ParetoFront = ga.extractParetoFront(population, baselineFlow)
 
 	for gen := 0; gen < ga.MaxGenerations; gen++ {
-		newPopulation := make([]Individual, 0, ga.PopulationSize)
+		offspring := make([]Individual, 0, ga.PopulationSize)
 
-		elitismCount := 2
-		for i := 0; i < elitismCount; i++ {
-			newPopulation = append(newPopulation, bestOverall)
-		}
-
-		for len(newPopulation) < ga.PopulationSize {
-			parent1 := ga.tournamentSelect(population)
-			parent2 := ga.tournamentSelect(population)
+		for len(offspring) < ga.PopulationSize {
+			parent1 := ga.nsga2TournamentSelect(population)
+			parent2 := ga.nsga2TournamentSelect(population)
 
 			child1, child2 := ga.crossover(parent1, parent2)
 			child1 = ga.mutate(child1)
@@ -258,31 +490,92 @@ func (ga *GeneticOptimizer) Optimize(req models.OptimizationRequest) (*models.Op
 			ga.evaluateIndividual(&child1)
 			ga.evaluateIndividual(&child2)
 
-			newPopulation = append(newPopulation, child1)
-			if len(newPopulation) < ga.PopulationSize {
-				newPopulation = append(newPopulation, child2)
+			offspring = append(offspring, child1)
+			if len(offspring) < ga.PopulationSize {
+				offspring = append(offspring, child2)
 			}
 		}
 
-		population = newPopulation[:ga.PopulationSize]
+		combined := make([]Individual, 0, len(population)+len(offspring))
+		combined = append(combined, population...)
+		combined = append(combined, offspring...)
 
-		bestInGen := ga.getBestIndividual(population)
-		if bestInGen.Fitness < bestOverall.Fitness {
-			bestOverall = bestInGen
+		fronts = ga.fastNonDominatedSort(combined)
+		for _, front := range fronts {
+			ga.crowdingDistanceAssignment(combined, front)
 		}
 
-		ga.ConvergenceCurve = append(ga.ConvergenceCurve, bestOverall.Fitness)
+		newPopulation := make([]Individual, 0, ga.PopulationSize)
+		for _, front := range fronts {
+			if len(newPopulation)+len(front) <= ga.PopulationSize {
+				newPopulation = append(newPopulation, combined[front[0]:front[len(front)-1]+1]...)
+				if len(newPopulation) >= ga.PopulationSize {
+					break
+				}
+			} else {
+				sortedFront := make([]int, len(front))
+				copy(sortedFront, front)
+				for i := 0; i < len(sortedFront)-1; i++ {
+					for j := i + 1; j < len(sortedFront); j++ {
+						if ga.nsga2Compare(combined[sortedFront[j]], combined[sortedFront[i]]) < 0 {
+							sortedFront[i], sortedFront[j] = sortedFront[j], sortedFront[i]
+						}
+					}
+				}
+				for _, idx := range sortedFront {
+					newPopulation = append(newPopulation, combined[idx])
+					if len(newPopulation) >= ga.PopulationSize {
+						break
+					}
+				}
+				break
+			}
+		}
+
+		if len(newPopulation) > ga.PopulationSize {
+			newPopulation = newPopulation[:ga.PopulationSize]
+		}
+		population = newPopulation
+
+		ga.ParetoFront = ga.extractParetoFront(population, baselineFlow)
+
+		var bestFlow float64 = 1e20
+		for _, p := range ga.ParetoFront {
+			if p.SeepageFlow < bestFlow {
+				bestFlow = p.SeepageFlow
+			}
+		}
+		ga.ConvergenceCurve = append(ga.ConvergenceCurve, bestFlow)
 
 		if gen >= 20 {
 			improved := false
 			recentBest := ga.ConvergenceCurve[len(ga.ConvergenceCurve)-1]
 			for i := len(ga.ConvergenceCurve) - 20; i < len(ga.ConvergenceCurve); i++ {
-				if math.Abs(recentBest-ga.ConvergenceCurve[i]) > bestOverall.Fitness*0.001 {
+				if math.Abs(recentBest-ga.ConvergenceCurve[i]) > math.Abs(recentBest)*0.001 {
 					improved = true
 					break
 				}
 			}
 			if !improved {
+				break
+			}
+		}
+	}
+
+	ga.ParetoFront = ga.extractParetoFront(population, baselineFlow)
+
+	var bestOverall Individual
+	bestOverall.SeepageFlow = 1e20
+	for _, ind := range population {
+		if ind.Valid && ind.SeepageFlow < bestOverall.SeepageFlow {
+			bestOverall = ind
+		}
+	}
+
+	if !bestOverall.Valid {
+		for _, ind := range population {
+			if ind.Valid {
+				bestOverall = ind
 				break
 			}
 		}
@@ -310,9 +603,20 @@ func (ga *GeneticOptimizer) Optimize(req models.OptimizationRequest) (*models.Op
 		reductionRate = (baselineFlow - finalSimResult.TotalSeepageFlow) / baselineFlow * 100
 	}
 
+	paretoData := make([]map[string]interface{}, 0)
+	for _, p := range ga.ParetoFront {
+		paretoData = append(paretoData, map[string]interface{}{
+			"blanket_length":    p.BlanketLength,
+			"blanket_thickness": p.BlanketThickness,
+			"seepage_flow":      p.SeepageFlow,
+			"material_cost":     p.MaterialCost,
+			"flow_reduction":    p.FlowReduction,
+		})
+	}
+
 	result := &models.OptimizationResult{
 		OptimizationName:     req.OptimizationName,
-		Algorithm:            "genetic_algorithm",
+		Algorithm:            "NSGA-II",
 		UpstreamWaterLevel:   ga.UpstreamH,
 		DownstreamWaterLevel: ga.DownstreamH,
 		BlanketLength:        bestOverall.BlanketLength,
@@ -323,7 +627,7 @@ func (ga *GeneticOptimizer) Optimize(req models.OptimizationRequest) (*models.Op
 		FlowReductionRate:    reductionRate,
 		GenerationCount:      len(ga.ConvergenceCurve),
 		PopulationSize:       ga.PopulationSize,
-		BestFitness:          bestOverall.Fitness,
+		BestFitness:          bestOverall.SeepageFlow,
 		OptimizationTimeMs:   optTime,
 		Parameters: map[string]interface{}{
 			"mutation_rate":          ga.MutationRate,
@@ -331,7 +635,18 @@ func (ga *GeneticOptimizer) Optimize(req models.OptimizationRequest) (*models.Op
 			"tournament_size":        ga.TournamentSize,
 			"blanket_permeability":   ga.BlanketPermeability,
 			"base_permeability":      ga.BaseSolver.PermeabilityK,
-			"average_final_fitness":  ga.getAverageFitness(population),
+			"material_cost":          bestOverall.MaterialCost,
+			"max_budget":             ga.CostConfig.MaxBudget,
+			"budget_constraint":      ga.CostConfig.MaxBudget > 0,
+			"pareto_front_size":      len(ga.ParetoFront),
+			"pareto_front":           paretoData,
+			"cost_config": map[string]interface{}{
+				"concrete_unit_price":     ga.CostConfig.ConcreteUnitPrice,
+				"clay_unit_price":         ga.CostConfig.ClayUnitPrice,
+				"geomembrane_unit_price":  ga.CostConfig.GeomembraneUnitPrice,
+				"excavation_unit_price":   ga.CostConfig.ExcavationUnitPrice,
+				"max_budget":              ga.CostConfig.MaxBudget,
+			},
 		},
 		ConvergenceCurve: ga.ConvergenceCurve,
 	}

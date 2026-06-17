@@ -441,12 +441,25 @@ class Dam3DViewer {
     }
 
     createRandomParticle() {
-        const x = Math.random() * this.damLength;
-        const y = -this.foundationDepth + Math.random() * (this.upstreamWL + this.foundationDepth);
-        const z = (Math.random() - 0.5) * 10;
-
         const gradient = (this.upstreamWL - this.downstreamWL) / this.damLength;
         const baseSpeed = 0.002 + gradient * 0.01;
+
+        let x, y, z;
+        let attempts = 0;
+        do {
+            x = Math.random() * this.damLength;
+            y = -this.foundationDepth + Math.random() * (this.upstreamWL + this.foundationDepth);
+            z = (Math.random() - 0.5) * 10;
+            attempts++;
+        } while (!this.isInsideDamBody(x, y) && attempts < 50);
+
+        if (attempts >= 50) {
+            const { xStart } = this.damProfile(this.upstreamWL * 0.3);
+            x = Math.max(0, xStart - 1) + Math.random() * 3;
+            y = Math.random() * this.upstreamWL * 0.5;
+            z = (Math.random() - 0.5) * 10;
+        }
+
         const yFactor = Math.max(0, 1 - y / (this.upstreamWL + 2));
 
         return {
@@ -460,12 +473,52 @@ class Dam3DViewer {
         };
     }
 
+    isInsideDamBody(x, y) {
+        if (x < 0 || x > this.damLength) return false;
+        if (y > this.upstreamWL + 0.5 || y < -this.foundationDepth - 0.5) return false;
+
+        if (y <= 0) {
+            return x >= 0 && x <= this.damLength;
+        }
+
+        const { xStart, xEnd } = this.damProfile(y);
+        return x >= xStart && x <= xEnd;
+    }
+
+    constrainParticleToDamBody(p) {
+        if (p.y <= 0) {
+            p.x = Math.max(0, Math.min(this.damLength, p.x));
+            return;
+        }
+
+        const { xStart, xEnd } = this.damProfile(p.y);
+
+        if (p.x < xStart) {
+            p.x = xStart + 0.01;
+            p.vx = Math.abs(p.vx) * 0.3;
+        }
+        if (p.x > xEnd) {
+            p.x = xEnd - 0.01;
+            p.vx = -Math.abs(p.vx) * 0.3;
+        }
+
+        if (p.y > this.damHeight) {
+            p.y = this.damHeight - 0.01;
+            p.vy = -Math.abs(p.vy) * 0.3;
+        }
+        if (p.y < 0) {
+            p.y = 0.01;
+            p.vy = Math.abs(p.vy) * 0.1;
+        }
+    }
+
     updateParticles() {
         if (!this.options.showStreamlines || !this.particleGeometry) return;
 
         const positions = this.particleGeometry.attributes.position.array;
         const colors = this.particleGeometry.attributes.color.array;
         const speedMult = this.options.particleSpeed / 5;
+        const maxSubSteps = 3;
 
         for (let i = 0; i < this.streamParticles.length; i++) {
             const p = this.streamParticles[i];
@@ -474,18 +527,64 @@ class Dam3DViewer {
                 this.adjustVelocityFromSimulation(p);
             }
 
-            p.x += p.vx * speedMult;
-            p.y += p.vy * speedMult;
-            p.z += p.vz * speedMult;
+            const effectiveSpeed = speedMult;
+            const dt = 1.0 / maxSubSteps;
+
+            for (let sub = 0; sub < maxSubSteps; sub++) {
+                const oldX = p.x;
+                const oldY = p.y;
+
+                p.x += p.vx * effectiveSpeed * dt;
+                p.y += p.vy * effectiveSpeed * dt;
+                p.z += p.vz * effectiveSpeed * dt;
+
+                if (!this.isInsideDamBody(p.x, p.y)) {
+                    p.x = oldX;
+                    p.y = oldY;
+
+                    if (p.y > 0) {
+                        const { xStart, xEnd } = this.damProfile(p.y);
+
+                        const dLeft = p.x - xStart;
+                        const dRight = xEnd - p.x;
+                        const dTop = this.damHeight - p.y;
+                        const dBottom = p.y;
+
+                        const minDist = Math.min(
+                            dLeft > 0 ? dLeft : Infinity,
+                            dRight > 0 ? dRight : Infinity,
+                            dTop > 0 ? dTop : Infinity,
+                            dBottom > 0 ? dBottom : Infinity
+                        );
+
+                        if (minDist === dLeft || minDist === dRight) {
+                            p.vx = -p.vx * 0.2;
+                        } else {
+                            p.vy = -p.vy * 0.2;
+                        }
+
+                        p.x += p.vx * effectiveSpeed * dt * 0.5;
+                        p.y += p.vy * effectiveSpeed * dt * 0.5;
+
+                        if (!this.isInsideDamBody(p.x, p.y)) {
+                            p.x = oldX;
+                            p.y = oldY;
+                        }
+                    } else {
+                        p.vx = -p.vx * 0.2;
+                        p.vy = -p.vy * 0.2;
+                    }
+                }
+
+                this.constrainParticleToDamBody(p);
+            }
+
             p.life -= 0.005 * speedMult;
 
-            const { xStart, xEnd } = this.damProfile(p.y);
-            let inDam = (p.x >= xStart && p.x <= xEnd && p.y > 0) ||
-                        (p.y <= 0 && p.x >= 0 && p.x <= this.damLength);
+            const outOfBounds = p.x < -5 || p.x > this.damLength + 5 ||
+                p.y < -this.foundationDepth - 1 || p.y > this.upstreamWL + 1;
 
-            if (p.x < -5 || p.x > this.damLength + 5 ||
-                p.y < -this.foundationDepth - 1 || p.y > this.upstreamWL + 1 ||
-                p.life <= 0 || !inDam) {
+            if (outOfBounds || p.life <= 0) {
                 Object.assign(p, this.createRandomParticle());
                 if (this.simulationData && this.simulationData.grids) {
                     this.seedParticleOnUpstream(p);
@@ -541,10 +640,23 @@ class Dam3DViewer {
 
     seedParticleOnUpstream(p) {
         const { xStart } = this.damProfile(this.upstreamWL * 0.5);
-        p.x = Math.max(0, xStart - 2) + Math.random() * 3;
-        p.y = Math.random() * this.upstreamWL;
+        const safeXStart = Math.max(0, xStart - 1);
+
+        let attempts = 0;
+        do {
+            p.x = safeXStart + Math.random() * 5;
+            p.y = Math.random() * this.upstreamWL;
+            attempts++;
+        } while (!this.isInsideDamBody(p.x, p.y) && attempts < 20);
+
+        if (attempts >= 20) {
+            p.x = this.damLength * 0.1;
+            p.y = -this.foundationDepth * 0.5;
+        }
+
         p.vx = Math.abs(p.vx);
-        p.vx = 0.005 + Math.random() * 0.005;
+        p.vx = 0.003 + Math.random() * 0.005;
+        p.vy = -0.001 + Math.random() * 0.002;
     }
 
     updatePressureCloud(simulationData) {
