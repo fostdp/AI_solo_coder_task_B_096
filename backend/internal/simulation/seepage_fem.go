@@ -495,14 +495,23 @@ func (s *SeepageSolver) CalculateVelocities() {
 }
 
 func (s *SeepageSolver) CalculateSeepageFlow() float64 {
+	if s.GridNY < 2 || s.GridNX < 2 {
+		return 0
+	}
+	if len(s.IsInDomain) < s.GridNY || len(s.VelocityX) < s.GridNY || len(s.XCoords) < s.GridNX {
+		return 0
+	}
+
 	dy := (s.Geometry.Height + s.Geometry.FoundationDepth) / float64(s.GridNY-1)
 	totalFlow := 0.0
 
 	for j := 0; j < s.GridNY; j++ {
+		if len(s.IsInDomain[j]) < s.GridNX || len(s.VelocityX[j]) < s.GridNX {
+			continue
+		}
 		for i := 0; i < s.GridNX; i++ {
 			if s.IsInDomain[j][i] {
-				x := s.XCoords[i]
-				if x >= s.XCoords[s.GridNX-2] {
+				if i >= s.GridNX-2 {
 					totalFlow += s.VelocityX[j][i] * dy
 				}
 			}
@@ -729,10 +738,16 @@ func (s *SeepageSolver) GetAvgPorePressure() float64 {
 	if s.GridNY < 1 || s.GridNX < 1 {
 		return 0
 	}
+	if len(s.IsInDomain) < s.GridNY || len(s.IsDamBody) < s.GridNY || len(s.PorePressure) < s.GridNY {
+		return 0
+	}
 
 	sum := 0.0
 	count := 0
 	for j := 0; j < s.GridNY; j++ {
+		if len(s.IsInDomain[j]) < s.GridNX || len(s.IsDamBody[j]) < s.GridNX || len(s.PorePressure[j]) < s.GridNX {
+			continue
+		}
 		for i := 0; i < s.GridNX; i++ {
 			if s.IsInDomain[j][i] && s.IsDamBody[j][i] {
 				sum += s.PorePressure[j][i]
