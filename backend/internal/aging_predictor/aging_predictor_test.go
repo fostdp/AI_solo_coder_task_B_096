@@ -1,4 +1,4 @@
-package aging
+package aging_predictor
 
 import (
 	"math"
@@ -6,8 +6,6 @@ import (
 
 	"tashan-weir-seepage/internal/models"
 )
-
-// ========== 正常场景测试 ==========
 
 func TestNewAgingModel_Normal(t *testing.T) {
 	model := NewAgingModel()
@@ -28,8 +26,6 @@ func TestNewAgingModel_Normal(t *testing.T) {
 		t.Errorf("初始损伤期望0，实际%f", model.InitialDamage)
 	}
 }
-
-// ========== 渗透系数演变趋势验证（核心测试） ==========
 
 func TestCalculatePermeabilityEvolution_MonotonicIncrease_Normal(t *testing.T) {
 	model := NewAgingModel()
@@ -213,8 +209,6 @@ func TestCompareAgingScenarios_Normal(t *testing.T) {
 	}
 }
 
-// ========== 失效概率评估测试 ==========
-
 func TestCalculateFailureProbability_Normal(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -263,8 +257,6 @@ func TestGetRecommendedAction_Normal(t *testing.T) {
 		t.Logf("老化%.0f%%/失效%.0f%% → %s", tt.agingDegree, tt.failureProb*100, action)
 	}
 }
-
-// ========== 边界场景测试 ==========
 
 func TestCalculatePermeabilityEvolution_ZeroPredictionYears_Boundary(t *testing.T) {
 	model := NewAgingModel()
@@ -337,8 +329,6 @@ func TestGetMaintenanceFactor_Boundary(t *testing.T) {
 		}
 	}
 }
-
-// ========== 异常场景测试 ==========
 
 func TestPredictAging_InvalidDamKey_Anomaly(t *testing.T) {
 	req := &models.AgingPredictionRequest{
@@ -458,8 +448,6 @@ func TestPermeabilityEvolution_PhysicalConsistency_Anomaly(t *testing.T) {
 	t.Logf("物理一致性: 50年→最终%.2e，1000年→最终%.2e", youngFinal, oldFinal)
 }
 
-// ========== 渗流量与渗透系数相关性验证 ==========
-
 func TestPredictAging_SeepageFlowCorrelation_Anomaly(t *testing.T) {
 	req := &models.AgingPredictionRequest{
 		DamKey:               "tashan_weir",
@@ -487,4 +475,49 @@ func TestPredictAging_SeepageFlowCorrelation_Anomaly(t *testing.T) {
 	}
 
 	t.Log("渗透系数-渗流量相关性验证通过")
+}
+
+func TestAgingPredictor_ThreeFactorBiologicalModel_Normal(t *testing.T) {
+	model := NewAgingModel()
+
+	if model.MicrobeFactor <= 0 {
+		t.Error("微生物侵蚀因子应>0")
+	}
+	if model.PlantFactor <= 0 {
+		t.Error("植物侵蚀因子应>0")
+	}
+	if model.AnimalFactor <= 0 {
+		t.Error("动物侵蚀因子应>0")
+	}
+
+	totalBio := model.MicrobeFactor + model.PlantFactor + model.AnimalFactor
+	t.Logf("三因子生物侵蚀: 微生物=%.4f, 植物=%.4f, 动物=%.4f, 合计=%.4f",
+		model.MicrobeFactor, model.PlantFactor, model.AnimalFactor, totalBio)
+
+	if totalBio < 0.003 || totalBio > 0.01 {
+		t.Errorf("三因子合计%.4f超出合理范围[0.003, 0.01]", totalBio)
+	}
+}
+
+func TestAgingPredictor_BiologicalDamTypeSensitivity_Normal(t *testing.T) {
+	model := NewAgingModel()
+
+	ancientDamage := model.calculateAnimalDamage(50.0, string(models.DamTypeAncientStone))
+	modernDamage := model.calculateAnimalDamage(50.0, string(models.DamTypeModernConcrete))
+
+	t.Logf("动物侵蚀坝型敏感性: 古代石坝=%.6f, 现代混凝土=%.6f, 比值=%.1f",
+		ancientDamage, modernDamage, ancientDamage/modernDamage)
+
+	if ancientDamage <= modernDamage {
+		t.Error("古代石坝动物侵蚀应大于现代混凝土坝")
+	}
+}
+
+func TestAgingPredictor_PlantSeasonalEffect_Normal(t *testing.T) {
+	model := NewAgingModel()
+
+	summerDamage := model.calculatePlantDamage(0.5, 500)
+	winterDamage := model.calculatePlantDamage(0.0, 500)
+
+	t.Logf("植物侵蚀季节效应: 夏季(0.5年)=%.6f, 冬季(0.0年)=%.6f", summerDamage, winterDamage)
 }

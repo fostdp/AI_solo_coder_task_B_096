@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -486,5 +487,111 @@ func TestGetSeepageFlowPerMeter_ZeroLength_Anomaly(t *testing.T) {
 	flowPerMeter := solver.GetSeepageFlowPerMeter()
 	if flowPerMeter != 0 {
 		t.Errorf("坝长为0且网格未初始化时单宽渗流量应为0，实际%e", flowPerMeter)
+	}
+}
+
+func TestFemWorkerPool_ConcurrentJobs_Normal(t *testing.T) {
+	pool := NewFemWorkerPool(4)
+	defer pool.Shutdown()
+
+	preset := dam_presets.GetDamPreset("tashan_weir")
+	if preset == nil {
+		t.Fatal("获取预设失败")
+	}
+
+	jobs := 6
+	results := make([]*SimJobResult, jobs)
+
+	for i := 0; i < jobs; i++ {
+		wl := 5.0 + float64(i)*2.0
+		solver := NewSeepageSolverFromPreset(preset)
+		solver.SetGridResolution(30, 15)
+		resultCh := make(chan *SimJobResult, 1)
+		pool.Submit(&SimJob{
+			Solver:   solver,
+			UpWL:     wl,
+			DownWL:   3.2,
+			Label:    fmt.Sprintf("pool_test_%d", i),
+			ResultCh: resultCh,
+		})
+		results[i] = <-resultCh
+	}
+
+	successCount := 0
+	for i, res := range results {
+		if res.Error == nil && res.Simulation != nil {
+			successCount++
+			t.Logf("Job %d: flow=%.4f L/s, time=%dms", i, res.Simulation.TotalSeepageFlow*1000, res.Simulation.CalculationTimeMs)
+		} else {
+			t.Logf("Job %d: error=%v", i, res.Error)
+		}
+	}
+
+	if successCount == 0 {
+		t.Error("所有并发FEM作业均失败")
+	}
+	t.Logf("并发作业成功率: %d/%d", successCount, jobs)
+}
+
+func TestFemWorkerPool_DefaultWorkers_Boundary(t *testing.T) {
+	pool := NewFemWorkerPool(0)
+	defer pool.Shutdown()
+
+	preset := dam_presets.GetDamPreset("tashan_weir")
+	if preset == nil {
+		t.Fatal("获取预设失败")
+	}
+
+	solver := NewSeepageSolverFromPreset(preset)
+	solver.SetGridResolution(20, 10)
+	resultCh := make(chan *SimJobResult, 1)
+	pool.Submit(&SimJob{
+		Solver:   solver,
+		UpWL:     8.5,
+		DownWL:   3.2,
+		Label:    "default_pool_test",
+		ResultCh: resultCh,
+	})
+
+	res := <-resultCh
+	if res.Error != nil {
+		t.Errorf("默认worker池执行失败: %v", res.Error)
+	}
+	t.Log("默认worker池(0→4)正常工作")
+}
+
+func TestFemWorkerPool_MultiDamParallel_Normal(t *testing.T) {
+	pool := NewFemWorkerPool(3)
+	defer pool.Shutdown()
+
+	damKeys := []string{"tashan_weir", "mulan_bei", "yuliang_ba"}
+	resultChs := make([]chan *SimJobResult, len(damKeys))
+
+	for i, key := range damKeys {
+		preset := dam_presets.GetDamPreset(key)
+		if preset == nil {
+			continue
+		}
+		solver := NewSeepageSolverFromPreset(preset)
+		solver.SetGridResolution(30, 15)
+		ch := make(chan *SimJobResult, 1)
+		resultChs[i] = ch
+		pool.Submit(&SimJob{
+			Solver:   solver,
+			UpWL:     preset.DesignUpstreamWL,
+			DownWL:   preset.DesignDownstreamWL,
+			Label:    fmt.Sprintf("parallel_%s", key),
+			ResultCh: ch,
+		})
+	}
+
+	for i, ch := range resultChs {
+		if ch == nil {
+			continue
+		}
+		res := <-ch
+		if res.Simulation != nil {
+			t.Logf("坝%d: flow=%.4f L/s", i, res.Simulation.TotalSeepageFlow*1000)
+		}
 	}
 }

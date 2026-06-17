@@ -1,4 +1,4 @@
-package aging
+package aging_predictor
 
 import (
 	"fmt"
@@ -17,13 +17,11 @@ type AgingModel struct {
 	InitialDamage      float64
 	DamageGrowthRate   float64
 	WeatheringFactor   float64
-	// ===== 修复3: 完善生物侵蚀模型 =====
-	// 原BiologicalFactor过于笼统，分解为三类独立生物侵蚀因子
-	MicrobeFactor      float64  // 微生物侵蚀因子(细菌/真菌/藻类分泌有机酸溶解胶结物)
-	PlantFactor        float64  // 植物侵蚀因子(树根劈裂/腐殖质酸化)
-	AnimalFactor       float64  // 动物侵蚀因子(水獭/白蚁/蛀虫/软体动物钻孔)
-	HumidityFactor     float64  // 湿度影响因子(高湿度加速生物活动)
-	BiologicalInteractionFactor float64 // 生物间协同作用因子
+	MicrobeFactor      float64
+	PlantFactor        float64
+	AnimalFactor       float64
+	HumidityFactor     float64
+	BiologicalInteractionFactor float64
 }
 
 func NewAgingModel() *AgingModel {
@@ -34,16 +32,14 @@ func NewAgingModel() *AgingModel {
 		InitialDamage:           0.0,
 		DamageGrowthRate:        0.005,
 		WeatheringFactor:        0.003,
-		// ===== 修复3: 校准后的生物侵蚀因子 =====
-		MicrobeFactor:           0.0015,   // 微生物：侵蚀速度慢但持续，主要影响砂浆
-		PlantFactor:             0.0025,   // 植物：树根劈裂影响大，间歇性(雨季)
-		AnimalFactor:            0.0010,   // 动物：钻孔形成渗流通道，局部但危险
-		HumidityFactor:          0.85,     // 南方湿润地区湿度系数
-		BiologicalInteractionFactor: 1.25, // 植物根系为微生物提供通道，协同效应25%
+		MicrobeFactor:           0.0015,
+		PlantFactor:             0.0025,
+		AnimalFactor:            0.0010,
+		HumidityFactor:          0.85,
+		BiologicalInteractionFactor: 1.25,
 	}
 }
 
-// ===== 修复3: 新增生物侵蚀子模型函数 =====
 func (m *AgingModel) calculateMicrobialDamage(year float64, climateFactor float64, totalAge float64) float64 {
 	seasonalModulation := 0.7 + 0.3*math.Sin(2*math.Pi*year/1)
 	temperatureEffect := 1.0
@@ -91,7 +87,6 @@ func (m *AgingModel) CalculatePermeabilityEvolution(
 	currentDamage := m.InitialDamage
 
 	maintenanceFactor := getMaintenanceFactor(maintenanceFreq)
-	// 维护对生物侵蚀有额外抑制(除草/清缝/修补孔洞)
 	biologicalMaintenanceFactor := maintenanceFactor * 0.9
 
 	climateFactor := 1.0
@@ -108,7 +103,6 @@ func (m *AgingModel) CalculatePermeabilityEvolution(
 		damageGrowth := m.DamageGrowthRate * ageFactor * climateFactor
 		weathering := m.WeatheringFactor * math.Sqrt(year+1) * climateFactor
 
-		// ===== 修复3: 使用完善的三类生物侵蚀模型 =====
 		microbeDamage := m.calculateMicrobialDamage(year, climateFactor, totalAge)
 		plantDamage := m.calculatePlantDamage(year, totalAge)
 		animalDamage := m.calculateAnimalDamage(year, string(models.DamTypeAncientStone))

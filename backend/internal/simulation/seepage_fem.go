@@ -3,6 +3,7 @@ package simulation
 import (
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"tashan-weir-seepage/internal/models"
@@ -922,5 +923,61 @@ func (s *SeepageSolver) RunComparison(upWL, downWL float64) (*models.DamComparis
 	}
 
 	return item, simResult, grids
+}
+
+type SimJob struct {
+	Solver    *SeepageSolver
+	UpWL      float64
+	DownWL    float64
+	Label     string
+	ResultCh  chan *SimJobResult
+}
+
+type SimJobResult struct {
+	Simulation *models.SeepageSimulation
+	Grids      []models.SimulationGrid
+	Error      error
+}
+
+type FemWorkerPool struct {
+	jobs    chan *SimJob
+	workers int
+	wg      sync.WaitGroup
+}
+
+func NewFemWorkerPool(workers int) *FemWorkerPool {
+	if workers <= 0 {
+		workers = 4
+	}
+	p := &FemWorkerPool{
+		jobs:    make(chan *SimJob, workers*4),
+		workers: workers,
+	}
+	for i := 0; i < workers; i++ {
+		p.wg.Add(1)
+		go p.worker()
+	}
+	return p
+}
+
+func (p *FemWorkerPool) worker() {
+	defer p.wg.Done()
+	for job := range p.jobs {
+		sim, grids, err := job.Solver.Run(job.UpWL, job.DownWL, job.Label)
+		job.ResultCh <- &SimJobResult{
+			Simulation: sim,
+			Grids:      grids,
+			Error:      err,
+		}
+	}
+}
+
+func (p *FemWorkerPool) Submit(job *SimJob) {
+	p.jobs <- job
+}
+
+func (p *FemWorkerPool) Shutdown() {
+	close(p.jobs)
+	p.wg.Wait()
 }
 

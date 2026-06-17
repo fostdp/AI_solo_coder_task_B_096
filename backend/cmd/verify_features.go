@@ -5,8 +5,10 @@ import (
 	"math"
 	"time"
 
-	"tashan-weir-seepage/internal/aging"
-	"tashan-weir-seepage/internal/comparison"
+	"tashan-weir-seepage/internal/aging_predictor"
+	"tashan-weir-seepage/internal/dam_comparator"
+	"tashan-weir-seepage/internal/era_comparator"
+	"tashan-weir-seepage/internal/vr_dam"
 	"tashan-weir-seepage/internal/dam_presets"
 	"tashan-weir-seepage/internal/models"
 	"tashan-weir-seepage/internal/simulation"
@@ -194,7 +196,7 @@ func testSeepageSimulatorExtension() bool {
 func testAgingPrediction() bool {
 	fmt.Println("  --- 测试坝体老化预测 ---")
 
-	agingModel := aging.NewAgingModel()
+	agingModel := aging_predictor.NewAgingModel()
 	fmt.Printf("  老化模型参数: 活化能=%.0f J/mol, 参考温度=%.2f K\n",
 		agingModel.ActivationEnergy, agingModel.TemperatureRef)
 
@@ -229,7 +231,7 @@ func testAgingPrediction() bool {
 	}
 
 	fmt.Println("\n  执行完整老化预测...")
-	result, err := aging.PredictAging(req)
+	result, err := aging_predictor.PredictAging(req)
 	if err != nil {
 		fmt.Printf("  ❌ 预测失败: %v\n", err)
 		return false
@@ -264,7 +266,7 @@ func testAgingPrediction() bool {
 	}
 
 	fmt.Println("\n  多情景对比测试...")
-	scenarios, err := aging.CompareAgingScenarios("tashan_weir", req)
+	scenarios, err := aging_predictor.CompareAgingScenarios("tashan_weir", req)
 	if err != nil {
 		fmt.Printf("  ❌ 情景对比失败: %v\n", err)
 		return false
@@ -298,7 +300,7 @@ func testComparisonService() bool {
 	}
 
 	start := time.Now()
-	cmpResult, err := comparison.CompareDams(cmpReq)
+	cmpResult, err := dam_comparator.CompareDams(cmpReq)
 	calcTime := time.Since(start)
 
 	if err != nil {
@@ -340,7 +342,7 @@ func testComparisonService() bool {
 	}
 
 	start = time.Now()
-	crossResult, err := comparison.CrossEraComparison(crossReq)
+	crossResult, err := era_comparator.CrossEraComparison(crossReq)
 	calcTime = time.Since(start)
 
 	if err != nil {
@@ -377,7 +379,7 @@ func testComparisonService() bool {
 	}
 
 	start = time.Now()
-	interResult, err := comparison.InteractiveAdjustment(interReq)
+	interResult, err := vr_dam.InteractiveAdjustment(interReq)
 	calcTime = time.Since(start)
 
 	if err != nil {

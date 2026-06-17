@@ -17,10 +17,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"tashan-weir-seepage/internal/aging"
+	"tashan-weir-seepage/internal/aging_predictor"
 	"tashan-weir-seepage/internal/alarm_mqtt"
 	"tashan-weir-seepage/internal/anti_seepage_optimizer"
-	"tashan-weir-seepage/internal/comparison"
+	"tashan-weir-seepage/internal/dam_comparator"
+	"tashan-weir-seepage/internal/era_comparator"
+	"tashan-weir-seepage/internal/vr_dam"
 	"tashan-weir-seepage/internal/dam_presets"
 	"tashan-weir-seepage/internal/database"
 	"tashan-weir-seepage/internal/dtu_receiver"
@@ -667,7 +669,7 @@ func (s *Server) handleCompareDams(c *gin.Context) {
 		return
 	}
 
-	result, err := comparison.CompareDams(&req)
+	result, err := dam_comparator.CompareDams(&req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -683,7 +685,7 @@ func (s *Server) handleCrossEraComparison(c *gin.Context) {
 		return
 	}
 
-	result, err := comparison.CrossEraComparison(&req)
+	result, err := era_comparator.CrossEraComparison(&req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -701,7 +703,7 @@ func (s *Server) handlePredictAging(c *gin.Context) {
 		return
 	}
 
-	result, err := aging.PredictAging(&req)
+	result, err := aging_predictor.PredictAging(&req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -717,7 +719,7 @@ func (s *Server) handleCompareAgingScenarios(c *gin.Context) {
 		return
 	}
 
-	results, err := aging.CompareAgingScenarios(req.DamKey, &req)
+	results, err := aging_predictor.CompareAgingScenarios(req.DamKey, &req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -738,7 +740,7 @@ func (s *Server) handleInteractiveAdjustment(c *gin.Context) {
 		return
 	}
 
-	result, err := comparison.InteractiveAdjustment(&req)
+	result, err := vr_dam.InteractiveAdjustment(&req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
